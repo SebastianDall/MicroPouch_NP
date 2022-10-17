@@ -1,0 +1,244 @@
+---
+title: "plots and figures"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## load libraries
+```{r}
+library(tidyverse)
+library(ggpubr)
+```
+
+
+# Metadata
+
+```{r}
+pdai %>% 
+  mutate(redcap_event_name = factor(redcap_event_name, levels = c("inclusion_arm_1", "followup_30day_arm_1")),
+         study_id = as.factor(as.numeric(study_id))) %>% 
+  group_by(study_id) %>% 
+  filter(n_distinct(redcap_event_name) == 2) %>% 
+  ggplot(aes(x = redcap_event_name, y = pdai_score, 
+             fill = factor(redcap_event_name, levels = c("inclusion_arm_1", "followup_30day_arm_1"))))+
+  geom_boxplot(outlier.size = 0) +
+  geom_point(aes(group = study_id), position = position_dodge(0.2)) + #aes(x = as.factor(redcap_event_name), y = pdai_score) 
+  geom_line(aes(group = study_id), position = position_dodge(0.2)) + 
+  facet_grid(.~randomization_group)+
+  theme(legend.position = "none")
+  
+```
+
+
+```{r}
+pdai %>% 
+  mutate(redcap_event_name = factor(redcap_event_name, levels = c("inclusion_arm_1", "followup_30day_arm_1")),
+         study_id = as.factor(as.numeric(study_id))) %>% 
+  group_by(study_id) %>% 
+  filter(n_distinct(redcap_event_name) == 2) %>% 
+  group_by(randomization_group,redcap_event_name) %>% 
+  summarise(median = median(pdai_score))
+
+
+pdai_dif <- pdai %>% 
+  group_by(study_id) %>% 
+  filter(n_distinct(redcap_event_name) == 2) %>% 
+  select(study_id, redcap_event_name, randomization_group, pdai_score) %>% 
+  pivot_wider(names_from = redcap_event_name, values_from = pdai_score) %>% 
+  mutate(diff = inclusion_arm_1 - followup_30day_arm_1)
+
+```
+
+
+
+```{r}
+pdai_dif %>% 
+  ggplot(aes(x = diff)) +
+  geom_histogram() +
+  facet_grid(.~randomization_group)
+
+observed_statistic <- pdai %>% 
+  specify(pdai_score ~ randomization_group) %>% 
+  calculate(stat = "diff in means", order = c("FMT", "Placebo"))
+```
+
+
+
+
+
+
+## Load data
+```{r}
+d_ext <- read_csv("../data/metadata/csv/sample_metadata.csv")
+```
+
+```{r}
+stage_fct <- c("inclusion", 
+         "treatment_1", 
+         "treatment_2",
+         "treatment_3",
+         "treatment_4",
+         "control_30dg",
+         "control_1mth",
+         "control_3mth",
+         "control_6mth",
+         "control_12mth",
+         "drop_out")
+
+d_ext <- d_ext %>% 
+  mutate(stage = factor(stage, levels = stage_fct, labels = stage_fct))
+
+```
+
+
+
+## Patient concentration and completion plot
+### Illumina
+#### Extraction
+
+```{r}
+d_ext %>%
+  filter(project %in% c("MP","OP","NP")) %>% 
+  mutate(above_1 = ext_conc*3 > 1,
+         illumina = round(ext_conc*3,2)) %>% 
+  ggplot(aes(x = stage, y = id, fill = above_1, label = illumina)) + 
+  geom_tile(color = "white") + 
+  geom_text(color = "black") + 
+  #scale_color_manual(values = c("white", "red")) + 
+  scale_fill_manual(values = c("red4", "green4")) + 
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 45,
+                                   hjust = 1)) +
+  facet_grid(. ~project, scales = "free_x", space = "free_x") + 
+  ggtitle("Samples with enough DNA for 1 ng input using 3 µl")+
+  labs(y ="", x= "")
+```
+
+#### Library
+
+```{r}
+d_ext %>%
+  filter(project %in% c("MP","OP","NP")) %>%  
+  mutate(pool_ng = round(pool_ng, 2)) %>% 
+  ggplot(aes(x = stage, y = id, fill = pool_ng, label = pool_ng)) + 
+  geom_tile(color = "white") + 
+  geom_text(color = "black") + 
+  scale_fill_gradient(low = "red4", high = "green4") + 
+  #scale_fill_manual(values = c("red4", "blue4")) + 
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 45,
+                                   hjust = 1)) +
+  facet_grid(. ~project, scales = "free_x", space = "free_x") + 
+  #ggtitle("Samples with enough DNA for 20 ng input using 3 µl")+
+  labs(y ="", x= "")
+```
+
+
+#### Extraction / Library plate view
+```{r}
+gg_lib <- d_ext %>% 
+  filter(!is.na(lib_conc)) %>% 
+  mutate(pool_ng = round(pool_ng, 2),
+         new_row = fct_rev(new_row)) %>% 
+ggplot(aes(x = new_column, y = new_row, fill = pool_ng, label = pool_ng)) + 
+  geom_tile(color = "white") +
+  geom_text(color = "white") + 
+  scale_fill_gradient(low = "red4", high = "green4") + 
+  facet_wrap(.~library_plate) +
+  scale_x_discrete(expand = c(0, 0),position = 'top')
+
+gg_lib
+```
+
+
+```{r}
+gg_ext <- d_ext %>% 
+  filter(!is.na(tube_barcode)) %>% 
+  mutate(ext_conc = round(ext_conc, 2),
+         above10 = ext_conc*3 > 1,
+         new_row = fct_rev(new_row)) %>% 
+ggplot(aes(x = new_column, y = new_row, fill = above10, label = ext_conc)) + 
+  geom_tile(color = "white") +
+  geom_text(color = "white") + 
+  scale_fill_manual(values = c("red4", "green4")) + 
+  facet_wrap(.~library_plate) +
+  scale_x_discrete(expand = c(0, 0),position = 'top')
+
+gg_ext
+```
+
+```{r}
+ggarrange(gg_ext, gg_lib, ncol = 1 )
+```
+
+
+
+
+
+### Nanopore
+
+```{r}
+d_ext %>%
+  filter(project %in% c("MP","OP","NP")) %>%
+  mutate(above_500 = amount > 500,
+         nanopore = round(amount)) %>% 
+  ggplot(aes(x = stage, y = patient, fill = above_500, label = nanopore)) + 
+  geom_tile(color = "white") + 
+  geom_text(color = "black") + 
+  #scale_color_manual(values = c("white", "red")) + 
+   scale_fill_manual(values = c("red4", "green4")) + 
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 45,
+                                   hjust = 1)) +
+  facet_grid(. ~project, scales = "free_x", space = "free_x") + 
+  ggtitle("Samples with more than 500 ng in total") +
+  labs(y ="", x= "")
+```
+
+
+
+## Patient donor match visualization
+### Complicated
+```{r}
+don_l <- d_ext %>%
+  filter(stage %in% c("treatment_1", "treatment_2", "treatment_3", "treatment_4"),
+         project == "MP") %>% 
+  select(id, stage, project, group, donor, batch_1:batch_3) %>% 
+  pivot_longer(batch_1:batch_3, names_to = "batch", values_to = "value") %>% 
+  mutate(donor = if_else(is.na(donor), "placebo", donor)) %>% 
+
+
+  ggplot(aes(x = batch, y = id, fill = as.factor(donor), label = value)) + 
+  geom_tile(color="white") + 
+  facet_grid(~stage) + 
+  geom_text(check_overlap = T) + 
+  theme(axis.text.x = element_text(angle = 45,
+                                   hjust = 1))
+
+don_l
+```
+
+
+### Simple
+```{r}
+don_l <- d_ext %>%
+  filter(stage %in% c("treatment_1", "treatment_2", "treatment_3", "treatment_4"),
+         project %in% c("MP","OP","NP")) %>% 
+  select(id, stage, project, group, donor) %>%
+  mutate(donor = parse_number(donor)) %>% 
+  #mutate(donor = if_else(is.na(donor), "p", donor)) %>% 
+
+
+  ggplot(aes(x = stage, y = id, fill = group, label = donor)) + 
+  geom_tile(color="white") + 
+  facet_grid(~project) + 
+  geom_text(check_overlap = T) + 
+  theme(axis.text.x = element_text(angle = 45,
+                                   hjust = 1))
+
+don_l
+```
+

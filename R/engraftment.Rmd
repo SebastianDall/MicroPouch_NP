@@ -1,0 +1,301 @@
+---
+title: "engraftment"
+author: "Sebastian Mølvang Dall"
+date: "2022-09-13"
+output: html_document
+---
+
+
+```{r}
+library(tidyverse)
+library(ggpubr)
+```
+
+```{r}
+source("functions/metadata_functions.R")
+```
+
+
+### Load data
+
+```{r}
+metadata <- load_metadata()
+
+metaphlan <- load_metaphlan(taxonomic_level = "species")
+```
+
+
+```{r}
+relevant_metadata <- prepare_metadata(metadata)
+
+metadata_in_metaphlan <- relevant_metadata %>% 
+  filter(LibID %in% colnames(metaphlan))
+```
+
+
+```{r}
+metaphlan_long <- metaphlan %>% 
+  select(-NCBI_tax_id) %>% 
+  pivot_longer(-clade_name, names_to = "LibID") %>% 
+  arrange(LibID)
+```
+
+
+### adding remission TRUE/FALSE column and join with taxonomic data
+
+```{r}
+MP_metadata <- IsolateProjectAndDonor(metadata = metadata_in_metaphlan)
+```
+
+```{r}
+remission_relapse <- MP_metadata %>% 
+  filter(!is.na(pdai_score)) %>% 
+  group_by(id) %>% 
+  filter(n_distinct(stage) == 2) %>% 
+  select(id, stage, group, pdai_score) %>% 
+  pivot_wider(names_from = stage, values_from = pdai_score) %>% 
+  mutate(remission = if_else(inclusion - followup_30d > 2 & followup_30d <= 7, "remission", "relapse")) %>% 
+  select(id, group, remission)
+
+
+
+MP_metadata_with_remission <- left_join(MP_metadata, remission_relapse)
+
+
+
+```
+
+```{r}
+# metadata + metaphlan_long
+
+patients_completing_30d_followup <- unique(filter(MP_metadata_with_remission, !is.na(remission))$id)
+
+metadata_donor <- MP_metadata_with_remission %>% 
+  filter(x_axis == "Donor")
+
+metaphlan_matrix <- metaphlan %>%  
+  select(-NCBI_tax_id)
+
+patient_engraftment <- tibble()
+for (s in c("inclusion", "followup_30d")) {
+  
+
+  for (patient in patients_completing_30d_followup) {
+    
+    # patient_metadata <- MP_metadata_with_remission %>% 
+    #   filter(id == patient, stage %in% s)
+    # 
+    patient_metadata <- MP_metadata_with_remission %>% 
+    filter(id == patient)
+  
+    patient_stage <- patient_metadata %>% 
+      filter(stage == s)
+    
+    isPatientFMT = patient_metadata$group[1] == "FMT"
+    
+    if (isPatientFMT) {
+      patient_donors <- patient_metadata %>% 
+        pivot_longer(batch_1:batch_3, names_to = "batch", values_to = "batch_number") %>% 
+        filter(!is.na(batch_number)) %>% 
+        mutate(donor_batch = paste0(donor, "_", batch_number))
+      
+      donors <- metadata_donor %>% 
+        filter(donor_batch %in% patient_donors$donor_batch)
+      
+      excluded_donors <- metadata_donor %>% 
+        filter(!id %in% donors$id) %>% 
+        mutate(id_number = parse_number(id))
+      
+    } else {
+      excluded_donors <- metadata_donor %>% 
+        mutate(id_number = parse_number(id))
+    }
+    
+    
+    random_donors <- excluded_donors %>% 
+      filter(id_number %in% sample(unique(excluded_donors$id_number), 4)) %>% 
+      arrange(id) %>% 
+      group_by(id_number) %>% 
+      mutate(n_samples = row_number()) %>% 
+      filter(n_samples == sample(1:n(),1)) %>% 
+      ungroup()
+    
+    patient_and_random_donors <- bind_rows(patient_stage, random_donors) %>% 
+      select(id, LibID, group, x_axis) %>% 
+      left_join(metaphlan_long, by = "LibID")
+    
+    
+    engraftment_random <- patient_and_random_donors %>% 
+      arrange(clade_name) %>% 
+      group_by(clade_name, x_axis) %>% 
+      mutate(max_value = max(value)) %>% 
+      distinct(x_axis, .keep_all = T) %>% 
+      select(clade_name, x_axis, max_value) %>% 
+      mutate(x_axis = if_else(x_axis != "Donor", "Patient", "Donor")) %>% 
+      pivot_wider(names_from = x_axis, values_from = max_value) %>% 
+      mutate(
+             unique_to_patient = if_else(Donor == 0 & Patient != 0, T, F),
+             unique_to_donors = if_else(Donor != 0 & Patient == 0, T, F),
+             shared = if_else(Donor != 0 & Patient != 0, T, F)
+             ) %>% 
+      ungroup() %>% 
+      select(unique_to_patient:shared) %>% 
+      pivot_longer(unique_to_patient:shared, names_to = "variable", values_to = "value") %>% 
+      group_by(variable) %>% 
+      summarise(count = sum(value)) %>% 
+      mutate(id = patient_metadata$id[1],
+             group = patient_metadata$group[1],
+             comparison = "Random Donors"
+             ) %>% 
+      right_join(patient_stage, by = c("id", "group"))
+    
+    patient_engraftment <- bind_rows(patient_engraftment, engraftment_random) 
+    
+    if(isPatientFMT) {
+      patient_and_actual_donors <- bind_rows(patient_stage, donors) %>% 
+      select(id, LibID, group, x_axis) %>% 
+      left_join(metaphlan_long)
+      
+      
+      
+      engraftment_actual_donors <- patient_and_actual_donors %>% 
+      arrange(clade_name) %>% 
+      group_by(clade_name, x_axis) %>% 
+      mutate(max_value = max(value)) %>% 
+      distinct(x_axis, .keep_all = T) %>% 
+      select(clade_name, x_axis, max_value) %>% 
+      mutate(x_axis = if_else(x_axis != "Donor", "Patient", "Donor")) %>% 
+      pivot_wider(names_from = x_axis, values_from = max_value) %>% 
+      mutate(
+             unique_to_patient = if_else(Donor == 0 & Patient != 0, T, F),
+             unique_to_donors = if_else(Donor != 0 & Patient == 0, T, F),
+             shared = if_else(Donor != 0 & Patient != 0, T, F)
+             ) %>% 
+      ungroup() %>% 
+      select(unique_to_patient:shared) %>% 
+      pivot_longer(unique_to_patient:shared, names_to = "variable", values_to = "value") %>% 
+      group_by(variable) %>% 
+      summarise(count = sum(value)) %>% 
+      mutate(id = patient_metadata$id[1],
+             group = patient_metadata$group[1],
+             comparison = "Actual Donors"
+             ) %>% 
+      right_join(patient_stage, by = c("id", "group"))
+    
+      patient_engraftment <- bind_rows(patient_engraftment, engraftment_actual_donors) 
+      
+    }
+    
+  }
+
+}
+```
+
+
+```{r}
+patient_engraftment %>% 
+  group_by(id, x_axis, comparison) %>% 
+  summarise(total = sum(count)) %>% 
+  right_join()
+```
+
+
+```{r}
+
+patient_engraftment %>% 
+  filter(group == "FMT", x_axis == "Post" ,comparison == "Actual Donors") %>% 
+  mutate(variable = factor(variable, levels = c("unique_to_donors", "shared", "unique_to_patient")),
+         x_axis = factor(x_axis, levels = c("Pre", "Post")))  %>% 
+  ggplot(aes(x = id, y = variable, fill = count, label = count)) +
+  geom_tile(color = "white") +
+  geom_text(color = "white") +
+  facet_grid(.~remission, scales = "free_x", space = "free") +
+  theme(legend.position = "none") +
+  labs(y = "", x= "", title = "Relapse")
+
+
+remission <- patient_engraftment %>% 
+  mutate(variable = factor(variable, levels = c("not_found" ,"unique_to_donors", "shared", "unique_to_patient"))) %>% 
+  filter(remission == "remission") %>% 
+  ggplot(aes(x = stage, y = count, fill = variable)) +
+  geom_col() +
+  coord_flip() +
+  facet_grid(id~.) +
+  theme(legend.position = "bottom") +
+  labs(x = "", y= "", title = "Remission")
+ggarrange(relapse, remission, nrow = 2, heights = c(7,3))
+
+#ggsave("../figures/MP_engraftment.png", device = "png", height = 8, width =  11)
+```
+
+
+
+```{r}
+relapse <- patient_engraftment %>% 
+  mutate(variable = factor(variable, levels = c("not_found" ,"unique_to_donors", "shared", "unique_to_patient"))) %>% 
+  filter(remission == "remission", group == "FMT") %>% 
+  ggplot(aes(x = stage, y = count, fill = variable)) +
+  geom_col() +
+  coord_flip() +
+  facet_grid(id~comparison) +
+  theme(legend.position = "none") +
+  labs(y = "", x= "", title = "Relapse")
+
+
+remission <- patient_engraftment %>% 
+  mutate(variable = factor(variable, levels = c("not_found" ,"unique_to_donors", "shared", "unique_to_patient"))) %>% 
+  filter(remission == "remission") %>% 
+  ggplot(aes(x = stage, y = count, fill = variable)) +
+  geom_col() +
+  coord_flip() +
+  facet_grid(id~.) +
+  theme(legend.position = "bottom") +
+  labs(x = "", y= "", title = "Remission")
+ggarrange(relapse, remission, nrow = 2, heights = c(7,3))
+
+#ggsave("../figures/MP_engraftment.png", device = "png", height = 8, width =  11)
+```
+
+
+
+```{r}
+
+    
+    
+    patient_donor_metadata <- bind_rows(donor_metadata, patient_metadata)
+    
+    patient_donor_metadata_tax_data <- patient_donor_metadata %>% 
+      select(id, LibID, group, x_axis) %>% 
+      left_join(metaphlan_long)
+    
+    
+    engraftment <- patient_donor_metadata_tax_data %>% 
+      arrange(clade_name) %>% 
+      group_by(clade_name, x_axis) %>% 
+      mutate(max_value = max(value)) %>% 
+      distinct(x_axis, .keep_all = T) %>% 
+      select(clade_name, x_axis, max_value) %>% 
+      mutate(x_axis = if_else(x_axis != "Donor", "Patient", "Donor")) %>% 
+      pivot_wider(names_from = x_axis, values_from = max_value) %>% 
+      mutate(
+             unique_to_patient = if_else(Donor == 0 & Patient != 0, T, F),
+             unique_to_donors = if_else(Donor != 0 & Patient == 0, T, F),
+             shared = if_else(Donor != 0 & Patient != 0, T, F),
+             not_found = if_else(Donor == 0 & Patient == 0, T, F)
+             ) %>% 
+      ungroup() %>% 
+      select(unique_to_patient:not_found) %>% 
+      pivot_longer(unique_to_patient:not_found, names_to = "variable", values_to = "value") %>% 
+      group_by(variable) %>% 
+      summarise(count = sum(value)/n()) %>% 
+      mutate(id = patient_metadata$id,
+             group = patient_metadata$group
+             ) %>% 
+      right_join(patient_metadata)
+    
+    patient_engraftment <- bind_rows(patient_engraftment, engraftment) 
+    
+    
+    
+```
+

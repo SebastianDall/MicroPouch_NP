@@ -1,0 +1,599 @@
+---
+title: "220420_MicroPouch_Cleaning_metadata"
+author: "Sebastian Mølvang Dall"
+date: "20/4/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Loading Data
+
+```{r}
+library(tidyverse)
+library(janitor)
+library(ggpubr)
+library(lubridate)
+library(haven)
+library(labelled)
+```
+
+
+
+# Redcap metadata
+## Patients
+Loading metadata csv files - downloaded from REDcap
+
+>> There are discrepencies between redcap and downloaded csv file!!
+
+
+```{r}
+metadata <- read_dta("../../../MicroPouch/data/metadata/stata/metadata_mp.dta") %>% 
+  mutate(project = "MP") %>% 
+  fill(randomization_group)
+
+metadata_op <- read_dta("../../../MicroPouch/data/metadata/stata/metadata_op.dta") %>% 
+  mutate(project = "OP")
+
+metadata_np <- read_dta("../../../MicroPouch/data/metadata/stata/metadata_np.dta") %>% 
+  mutate(project = "NP") %>% 
+  rename(study_id = record_id)
+
+```
+
+
+
+
+### Joining the 3 datasets
+
+All projects are concatenated into one variable. The projects are distinguished by the `project` variable.
+
+```{r}
+m_all <- bind_rows(metadata, metadata_op, metadata_np) %>% 
+  arrange(study_id) %>% 
+  relocate(project, .after = study_id)
+```
+
+
+### Renaming columns
+* selecting relevant pouch data
+* uniting "duplicate" pdai columns
+
+the there are two versions of pdai questionnaire in the dataset. One from the inklusion and followup with pouch inspection, and one from the different treatment dates.
+
+
+```{r}
+m_sel <- m_all %>% 
+  select(study_id, project, randomization_group, redcap_event_name,
+         crp, leu, calp, stool_fre,
+         contains("pdai"), starts_with("pouchdys"), starts_with("sibdq"),
+         starts_with("diet"))
+```
+
+
+#### Calculating pdai score and add to m_p
+* **The score is not calculated for "OP" since the pdai_e and h is not completed**
+
+```{r}
+m_pdai <- m_sel %>% 
+  select(study_id, project, redcap_event_name, randomization_group, 
+         starts_with("pdai"), -pdai_complete, -pdai_date) %>% 
+  filter(redcap_event_name %in% c("inclusion_arm_1", "followup_30day_arm_1"),
+         project == "NP") %>%
+  group_by(study_id) %>% 
+  replace(is.na(.), 0) %>% 
+  mutate(pdai_score = rowSums(across(where(is.numeric)))) %>% 
+  select(study_id, project, redcap_event_name, pdai_score) %>% 
+  full_join(m_sel) %>% 
+  arrange(study_id, project)
+  
+```
+
+
+
+#### Deselecting irrelevant columns
+* Some columns contains irrelevant information such as height and age in the diet questionnaire.
+
+> deselect "timestamp", "complete", and "date column".
+
+> deselect non-recoded diet questions
+
+
+```{r}
+m_deselect <- m_pdai %>% 
+  select(-c(diet_date:diet_q1b),
+         -c(diet_q3:diet_q7),
+         -contains("complete"),
+         -contains("date"),
+         -contains("timestamp")
+         )
+```
+
+
+
+
+### mutate and rename columns for joining later
+
+This chunk prepares the dataframe to be concatenated with the lab-metadata later.
+* Patient name is changed.
+* redcap_event_name variables are renamed.
+* randomization_group (placebo, FMT) is changed and renamed group.
+
+This dataframe is going to be concatenated with the lab metadata.
+
+```{r}
+m_tmp <- m_deselect %>% 
+  ungroup() %>% 
+  # Changing study_id tags
+  mutate(
+    study_id = as.character(study_id),
+    study_id = if_else(nchar(study_id) == 1,
+                       paste0("pt00", study_id),
+                       paste0("pt0", study_id)
+                       ),
+           
+         # Renaming event names
+         redcap_event_name = str_replace(redcap_event_name, "\\_arm\\_1", ""), 
+         
+  ) %>% 
+  # Changing treatment variables in recap_event_name
+  mutate(
+    sub_label = stringr::str_split(redcap_event_name, "_"),
+    tmp_label = paste0(map_if(.x = sub_label, .p = ~is.vector(.x), 2), "_", map_if(.x = sub_label, .p=~is.vector(.x), 1)),
+    redcap_event_name = if_else(str_detect(tmp_label, "treatment"), tmp_label, redcap_event_name)
+  ) %>%
+  # Changing followup in redcap_event_name
+  mutate(
+    redcap_event_name = str_replace(redcap_event_name, "\\_days", "d"),
+    redcap_event_name = str_replace(redcap_event_name, "day", "d"),
+    redcap_event_name = str_replace(redcap_event_name, "\\_months", "m"),
+    redcap_event_name = str_replace(redcap_event_name, "\\_month", "m"),
+    redcap_event_name = str_replace(redcap_event_name, "\\_p", ""),
+    redcap_event_name = str_replace(redcap_event_name, "follow\\_up", "followup")
+  ) %>% 
+  rename(
+    id = study_id,
+    stage = redcap_event_name
+    
+  ) %>% 
+  mutate(randomization_group = if_else(randomization_group == 1,
+                                      "placebo",
+                                      "FMT"),
+         randomization_group = replace_na(randomization_group, "FMT")
+         ) %>% 
+  rename(group = randomization_group)
+```
+
+
+## FMT-donors
+
+
+```{r}
+metadata_fmt <- read_dta("../data/metadata/stata/metadata_fmt.dta")
+```
+
+
+### Isolating relevant redcap event
+
+Redcap_event_filter 1 is for the first article! In this project event 2 and 3 were used. Most of the metadata is inklusion analysis of pathological gut species. As patients are included these are not relevant and have been deselected.
+
+```{r}
+d_fmt_event_filter <- metadata_fmt %>% 
+  mutate(redcap_repeat_instrument = if_else(redcap_repeat_instrument == "", "info", redcap_repeat_instrument),
+         redcap_repeat_instance = if_else(redcap_repeat_instrument == "info", 2, redcap_repeat_instance)) %>% 
+  filter(redcap_repeat_instance != 1) %>% 
+  select(donor_id:gender,bmi_v2,
+         starts_with("diet"))
+```
+
+### Renaming of donors and columns
+
+```{r}
+d_fmt_renaming <- d_fmt_event_filter %>% 
+  mutate(donor_id = as.character(donor_id),
+         donor_id = if_else(nchar(donor_id) == 1, paste0("do00", donor_id), paste0("do0", donor_id)),
+         donor_id = if_else(str_detect(string = donor_id, pattern = "asym"), "asym004", donor_id)) %>% 
+  rename(id = donor_id)
+```
+
+### Deleting columns that are NA across
+
+```{r}
+d_fmt_no_NA <- d_fmt_renaming %>% 
+  filter(redcap_repeat_instrument %in% c("info", "diet_questionnaire")) %>% 
+  group_by(id) %>% 
+  filter(n_distinct(redcap_repeat_instrument) == 2)
+
+
+d_fmt_no_NA
+```
+
+```{r}
+unique(filter(d_full, project == "donor_screening")$id)
+```
+
+
+
+# Lab-relevant metadata
+## Donor Batch Overview and Barcode
+### Load Barcodes
+```{r}
+barcode_metadata <- read_csv("../data/metadata/csv/barcode_metadata.csv")
+```
+
+
+
+### Overview
+
+A donor batch is associated with a date and a donor number
+```{r}
+DoBa_overview <- read_csv("../data/metadata/csv/DoBa_oversigt.csv")
+
+DoBa_o_c <- DoBa_overview %>%
+  mutate(Donor = gsub("MTKF ", "do", Donor),
+         Donor = gsub(" ","_",Donor))
+
+DoBa_o_c <- DoBa_overview %>%
+  mutate(Donor = gsub("MTKF ", "", Donor),
+         Donor = ifelse(nchar(Donor) > 3, "asym004", paste0("do",Donor)))
+
+
+DoBa_o_l <- DoBa_o_c %>%
+  pivot_longer(cols = !Donor, names_to = c("batch_donation_number"),
+               values_to = "batch_name") %>%
+  mutate(batch_donation_number = gsub(".donation", "", batch_donation_number),
+         batch_donation_number = as.numeric(batch_donation_number)) %>%
+  filter(!is.na(batch_name)) %>%
+  rename(donor_number = Donor)
+
+```
+
+
+
+
+* Match donor names with `DoBa_o_c`
+```{r}
+DoBa <- barcode_metadata %>%
+  select(donor_number, batch_donation_number, barcode_clean) %>%
+  full_join(DoBa_o_l, by = c("donor_number", "batch_donation_number")) %>%
+  filter(!is.na(batch_donation_number)) %>%
+  mutate(batch_name = paste0("(",batch_name,")"))
+
+#write_csv(DoBa, file = "../data/metadata/csv/DoBa_bo.csv")
+```
+
+
+
+
+## Donor and patient match overview
+
+>**The last mutate corrects a date for do020 batch (17.09.19) corrected from (17.19.19)**
+
+
+```{r}
+PaDo_overview <- read_csv("../data/metadata/MicroPouch patient donor batch oversigt april2022.csv")
+
+PaDo_c <- PaDo_overview %>%
+  mutate(MicroPouch_NP = ifelse(grepl("(np)", Patient),T, F),
+         MicroPouch_open = ifelse(grepl("(o)", Patient),T, F),
+         ) %>%
+  mutate(Patient = gsub(pattern = "[[:punct:]]np[[:punct:]]",replacement = "",x = Patient),
+         Patient = gsub(pattern = "[[:punct:]]o[[:punct:]]",replacement = "",x = Patient),
+         Patient = gsub(pattern = " ", replacement = "", x = Patient))
+
+PaDo_l <- PaDo_c %>%
+  pivot_longer(Donor_1_batch_1:Donor_4_batch_2, names_to = "donor_batch", values_to = "batch") %>%
+  filter(!is.na(batch)) %>% 
+  separate_rows(batch, sep = " ") %>%
+  mutate(cat = ifelse(nchar(batch) == 10, "batch", "donor")) %>%
+  pivot_wider(names_from = cat, values_from = batch) %>%
+  mutate(donor = ifelse(donor != "asymp004", paste0("do",donor), "asym004"),
+         study = ifelse(MicroPouch_NP, "NP",
+                        ifelse(MicroPouch_open, "OP", "MP"))) %>%
+  select(-c(MicroPouch_NP, MicroPouch_open)) %>%
+  mutate(batch = ifelse(test = grepl("do020", donor), yes = ifelse(test = grepl("(17.19.19)", batch), yes = "(17.09.19)", no = batch), no = batch)) # Error in patient data overview.csv
+
+#write_csv(PaDo_c,"../data/metadata/csv/PatientDonor_match.csv")
+
+```
+
+
+## Join information in DoBa and PaDo
+This will create a dataframe for donor batch connection. 
+
+```{r}
+d_pado <- DoBa %>%
+  rename(batch = batch_name, donor = donor_number) %>%
+  full_join(PaDo_l, by = c("donor", "batch")) %>% 
+  mutate(stage = str_sub(donor_batch, 1,7),
+         stage = str_replace(stage, "Donor", "treatment")) %>% 
+  mutate(treatment_batch_number = str_sub(donor_batch,9,-1)) %>% 
+  mutate(stage = str_replace(stage, "1", "5"),
+         stage = str_replace(stage, "2", "10"),
+         stage = str_replace(stage, "3", "15"),
+         stage = str_replace(stage, "4", "21")
+         )
+```
+
+
+
+
+# Extraction koncentration and completion of study.
+
+I need to figure out who handed in a fecal sample. Those are the persons with sample_dates in the overview metadata. This has to be done for PaPr, PaOP and PaNP
+Thereafter I need to join these tables, and connect them with the EXT_conc file. Lastly I need to make a plot showing each fecal sample and its concentration. This should preferably also be done for donors and screenings.
+
+## PaPr overview
+
+> I have changed value pt001, kontrol30dg, 05.11.1 -> 05.11.19
+
+```{r}
+PaPr_overview <- read_csv("../data/metadata/csv/PaPr_overview.csv")
+
+
+PaPr_c <- PaPr_overview %>%
+  mutate(patient = gsub("[a-zA-z]", "", patient),
+         patient = gsub("[ -]","",patient),
+         patient = paste0("pt",patient)) %>%
+  #relocate(Kontrol_30dg, .after = `4_behandling`) %>% 
+  clean_names() %>% 
+  rename(inclusion = inklusion, 
+         treatment_5 = x1_behandling, 
+         treatment_10 = x2_behandling,
+         treatment_15 = x3_behandling,
+         treatment_21 = x4_behandling,
+         followup_30d = kontrol_30dg,
+         followup_1m = kontrol_1md,
+         followup_3m = kontrol_3md,
+         followup_6m = kontrol_6md,
+         followup_12m = kontrol_12md)
+
+PaPr_l <- PaPr_c %>%
+  pivot_longer(-patient, names_to = "stage", values_to = "patient_batch") %>%
+  mutate(patient_batch = ifelse(!is.na(patient_batch), paste0("(",patient_batch,")"),patient_batch)) %>%
+  mutate(project = "MP") %>% 
+  #filter(!is.na(patient_batch)) %>% 
+  group_by(patient) %>% 
+  mutate(fecal_donation_number = row_number())
+```
+
+
+
+
+## PaOP overview
+
+* load
+* clean up patient column
+* relocate kontrol_30dg
+* make long format and change patient_batch.
+```{r}
+PaOP_overview <- read_csv("../data/metadata/csv/PaOP_overview.csv")
+
+
+PaOP_c <- PaOP_overview %>%
+  mutate(patient = gsub("[a-zA-z]", "", patient),
+         patient = gsub("[ -]","",patient),
+         patient = paste0("pt",patient)) %>%
+  #relocate(Kontrol_30dg, .after = `4_behandling`) %>% 
+  rename(kontrol_3md = `Kontrol 3mdr`) %>% 
+  clean_names() %>% 
+  rename(inclusion = inklusion, 
+         treatment_5 = x1_behandling, 
+         treatment_10 = x2_behandling,
+         treatment_15 = x3_behandling,
+         treatment_21 = x4_behandling,
+         followup_30d = kontrol_30dg,
+         followup_1m = kontrol_1md,
+         followup_3m = kontrol_3md)
+
+PaOP_l <- PaOP_c %>%
+  pivot_longer(-patient, names_to = "stage", values_to = "patient_batch") %>%
+  mutate(patient_batch = ifelse(!is.na(patient_batch), paste0("(",patient_batch,")"),patient_batch)) %>% 
+  mutate(project = "OP") %>% 
+  group_by(patient) %>% 
+  mutate(fecal_donation_number = row_number())
+```
+
+
+
+## PaNP
+
+* load
+* clean up patient column
+* make long format and change patient_batch.
+
+```{r}
+PaNP_overview <- read_csv("../data/metadata/csv/PaNP_overview.csv")
+
+
+PaNP_c <- PaNP_overview %>%
+  mutate(patient = gsub("[a-zA-z]", "", patient),
+         patient = gsub("[ -]","",patient),
+         patient = paste0("pt",patient)) %>% 
+  clean_names() %>% 
+  rename(inclusion = inklusion, 
+         treatment_5 = x1_behandling, 
+         treatment_10 = x2_behandling,
+         treatment_15 = x3_behandling,
+         treatment_21 = x4_behandling,
+         followup_30d = kontrol_30dg,
+         followup_1m = kontrol_1md,
+         followup_3m = kontrol_3md,
+         followup_6m = kontrol_6md,
+         followup_12m = kontrol_12md)
+
+PaNP_l <- PaNP_c %>%
+  pivot_longer(-patient, names_to = "stage", values_to = "patient_batch") %>%
+  mutate(patient_batch = ifelse(!is.na(patient_batch), paste0("(",patient_batch,")"),patient_batch)) %>% 
+  mutate(project = "NP") %>% 
+  group_by(patient) %>% 
+  mutate(fecal_donation_number = row_number())
+```
+
+
+## Joining the overview tables
+
+Here I join the tables and filter out any patient_batch that was not received.
+
+Change stage names to english
+
+Add the fecal_batch_donation for later left_join
+
+```{r}
+stage_fct <- c("inclusion", 
+         "treatment_5", 
+         "treatment_10",
+         "treatment_15",
+         "treatment_21",
+         "followup_30d",
+         "followup_1m",
+         "followup_3m",
+         "followup_6m",
+         "followup_12m",
+         "drop_out")
+
+d_overview <- bind_rows(PaPr_l, PaOP_l, PaNP_l) %>% 
+  filter(!is.na(patient_batch)) %>% 
+  mutate(stage = factor(stage, levels = stage_fct, labels = stage_fct))
+```
+
+
+
+## Adding library concentrations
+
+ext_conc contains the extraction conc for each sample.
+
+```{r}
+ext_conc <- read_csv("../data/metagenomes_lab/220531_metagenome_libraries.csv")
+
+d_ext <- full_join(d_overview, ext_conc, by = c("patient", "fecal_donation_number", "project")) %>% 
+  mutate(patient = as.factor(patient),
+         patient = fct_rev(patient),
+         project = factor(project, levels = c("MP","OP","NP")),
+         amount = ext_conc * 80,
+         ext_conc = round(ext_conc, 2))
+
+```
+
+
+#### Fill in donor batch information
+
+```{r}
+
+d_fill_donorbatch <- d_pado %>% 
+  select(donor, barcode_clean, batch_donation_number, batch) %>% 
+  distinct() %>% 
+  rename(patient = donor,
+         sample_barcode = barcode_clean,
+         fecal_donation_number=batch_donation_number,
+         donor_batch = batch) %>% 
+  right_join(d_ext, by = c("sample_barcode", "patient","fecal_donation_number")) %>% 
+  unite("batch", c(patient_batch, donor_batch), na.rm = T)
+
+```
+
+
+
+## Adding treatment_1-4(5-21)_donor_batch
+```{r}
+d_treat <- d_pado %>% 
+  select(-c(donor_batch,batch, barcode_clean)) %>% 
+  pivot_wider(names_from = treatment_batch_number, values_from = batch_donation_number) %>% 
+  rename(patient = Patient,
+         project = study)
+```
+
+
+
+### gathering all metadata and deselecting irrelevant columns
+
+Also some tidying before joining.
+
+* Assinging project to donor screening
+* Uniting date and fecal_batch_date -> redundant
+* Tidying negative and positive controls
+* changing the LibID column because of error from excel sheet
+
+```{r}
+d_full <- d_fill_donorbatch %>% 
+  rename(fecal_batch_date = batch) %>% 
+  left_join(d_treat, by = c("patient", "stage", "project")) %>% 
+  rename(id = patient) %>%
+  # putting donor screening and Asym into are project
+  mutate(project = if_else(str_detect(sample_barcode, "DoBa"), true = "donor_batch",
+                           false = if_else(str_detect(sample_barcode, "DoSc"), true = "donor_screening", false = project))) %>% 
+  mutate(project = if_else(str_detect(sample_barcode, "Asym"), true = "donor_batch", false = project)) %>% 
+  # uniting date and fecal_batch_date
+  mutate(date = if_else(!is.na(date), paste0("(",date,")"), NA_character_)) %>% 
+  unite('fecal_batch_date', c(fecal_batch_date, date), remove = T, na.rm = T, sep = "") %>% 
+  mutate(fecal_batch_date =  if_else(fecal_batch_date == "", NA_character_, fecal_batch_date)) %>% 
+  # Giving all rows a variable called is_sample = TRUE for easy isolation later
+  mutate(is_sample = TRUE) %>% 
+  # Tidying negative and postive controls
+  mutate(sample_barcode = if_else(paste0(new_row,new_column) == "E12", "NEG_5", sample_barcode),
+         sample_barcode = if_else(paste0(new_row,new_column) == "F12", "PCR_POS", sample_barcode),
+         sample_barcode = if_else(is.na(id),
+                                  true = paste0(library_plate, "_", sample_barcode),
+                                  false = sample_barcode)) %>% 
+  # Excel sheet error correction LIB00007: MP014 -> MP013 
+  mutate(LibID = if_else(library_plate == "LIB00007", str_replace(LibID, "MP014", "MP013"), LibID)) %>% 
+  
+  # Deselecting irrelevant columns
+  select(-c(scan_time, barcode, orientation_barcode,))
+```
+
+## Correcting stages
+Apparently follow up is continued even though the a drop_out has occurred. This interferes with the other projects. I will try to solve this:
+
+> A problem occurs because same patient in different projects have 2 fecal donations with the same date. However can they be in two projects at one time???. pt9 (MP+OP) MP_followup_6m == OP_followup_1m. PaPr00000082MP = PaOp00000052MP?
+
+```{r}
+
+open_patients <- d_full %>% 
+  filter(project == "OP") %>% 
+  select(id, project) %>% 
+  distinct(id)
+
+
+d_stage_correction <- d_full %>% 
+  # Convert fecat_batch_date to lubridate formaet
+  mutate(fecal_batch_date = str_replace(fecal_batch_date, "\\(",""),
+         fecal_batch_date = str_replace(fecal_batch_date, "\\)",""),
+         fecal_batch_date = dmy(fecal_batch_date)) %>% 
+  # Move follow-ups after drop out to OP instead
+  select(id, project, stage, fecal_batch_date) %>% 
+  filter(project %in% c("MP", "NP", "OP")) %>% 
+  pivot_wider(names_from = stage, values_from = fecal_batch_date) %>% 
+  pivot_longer(-c(id, project, drop_out), names_to = "stage", values_to = "fecal_batch_date") %>% 
+  filter(!is.na(fecal_batch_date)) %>% 
+  mutate(project = if_else(
+    condition = project == "MP" & drop_out < fecal_batch_date & id %in% open_patients$id, 
+    true = "OP",
+    false = project
+  )) %>% 
+  pivot_wider(names_from = stage, values_from = fecal_batch_date) %>% 
+  pivot_longer(drop_out:followup_3m, names_to = "stage", values_to = "fecal_batch_date")
+  
+```
+
+
+
+
+```{r}
+#write_csv(d_full, "../data/metadata/csv/sample_metadata.csv")
+```
+
+## Full metadata
+
+```{r}
+m_full_metadata <- full_join(d_full,m_tmp, by = c("id", "stage", "project")) %>% 
+  mutate(is_sample = if_else(is.na(is_sample), FALSE, is_sample)) %>% 
+  relocate(is_sample, .after = project)
+
+
+#write_delim(m_full_metadata, "../data/metadata/csv/full_metadata.csv", delim = ";")
+```
+
+

@@ -1,0 +1,184 @@
+---
+title: "ggplots for metadata"
+author: "Sebastian Mølvang Dall"
+date: '2022-06-22'
+output: html_document
+---
+
+
+### Libraries
+
+```{r}
+library(tidyverse)
+library(ggpubr)
+source("functions/metadata_functions.R")
+```
+
+
+
+#### Stage factor
+
+```{r}
+stage_fct <- c("inclusion", 
+         "treatment_5", 
+         "treatment_10",
+         "treatment_15",
+         "treatment_21",
+         "followup_30d",
+         "followup_1m",
+         "followup_3m",
+         "followup_6m",
+         "followup_12m",
+         "drop_out")
+```
+
+
+
+
+
+### Load metadata file
+
+```{r}
+m <- load_metadata()
+```
+
+#### patient samples
+```{r}
+m_pt <- m %>% 
+  filter(!is.na(LibID), project %in% c("MP", "OP", "NP")) %>% 
+  mutate(stage = factor(stage, levels = stage_fct, labels = stage_fct),
+         pool_ng = round(pool_ng, 2)) %>% 
+  arrange(id, project) %>% 
+  fill(group, .direction = "down")
+```
+
+
+
+## Library preparation
+```{r}
+m_pt %>% 
+  ggplot(aes(x = stage, y = id, fill = pool_ng, label = pool_ng)) + 
+  geom_tile(color = "white") + 
+  #geom_text(color = "black") + 
+  scale_fill_gradient(low = "red4", high = "green4") + 
+  #scale_fill_manual(values = c("red4", "blue4")) + 
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 45,
+                                   hjust = 1)) +
+  facet_grid(. ~project, scales = "free_x", space = "free_x") + 
+  #ggtitle("Samples with enough DNA for 20 ng input using 3 µl")+
+  labs(y ="", x= "")
+  
+```
+
+
+## DNA extraction concentration
+```{r}
+m_pt %>% 
+  mutate(DNA_ng = round(ext_conc*80),
+         above100 = DNA_ng >= 100) %>% 
+  ggplot(aes(x = stage, y = id, fill = above100, label = DNA_ng)) + 
+  geom_tile(color = "white") + 
+  geom_text(color = "white") + 
+  scale_fill_manual(values = c("red4", "blue4")) + 
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 45,
+                                   hjust = 1)) +
+  facet_grid(group ~project, scales = "free", space = "free") + 
+  labs(y ="", x= "")
+  
+```
+
+
+
+## DNA extraction donor
+
+```{r}
+m %>% 
+  filter(project == "donor_batch") %>% 
+  mutate(DNA_ng = round(ext_conc*80),
+         above100 = DNA_ng >= 100,
+         donor_batch = paste0(id, "_", fecal_donation_number)) %>%
+  ggplot(aes(x = as.factor(fecal_donation_number), y = id, fill = ext_conc, label = DNA_ng)) + 
+  geom_tile(color = "white") + 
+  geom_text(color = "white") + 
+  scale_fill_gradient(low = "red4", high = "green4") + 
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 45,
+                                   hjust = 1)) +
+  labs(y ="", x= "")
+```
+
+
+
+
+
+## patient donor pairing
+```{r}
+m_pt %>%
+  filter(stage %in% c("treatment_5", "treatment_10", "treatment_15", "treatment_21"),
+         !is.na(group)) %>% 
+  select(id, stage, project, group, donor) %>%
+  mutate(donor = parse_number(donor)) %>% 
+  ggplot(aes(x = stage, y = id, fill = group, label = donor)) + 
+  geom_tile(color="white") + 
+  facet_grid(~project) + 
+  geom_text(check_overlap = T) + 
+  theme(axis.text.x = element_text(angle = 45,
+                                   hjust = 1))
+
+```
+
+
+
+## PDAI score
+
+```{r}
+integer_breaks <- function(n = 5, ...) {
+  fxn <- function(x) {
+    breaks <- floor(pretty(x, n, ...))
+    names(breaks) <- attr(breaks, "labels")
+    breaks
+  }
+  return(fxn)
+}
+```
+
+
+```{r}
+m %>% 
+  filter(stage %in% c("inclusion", "followup_30d"),
+         str_detect(id, "pt"),
+         project == "MP") %>% 
+  group_by(id) %>%
+  filter(n_distinct(stage) == 2) %>% 
+  mutate(stage = factor(stage, levels = c("inclusion", "followup_30d"), labels = c("Pre", "Post"))) %>% 
+  ggplot(aes(x = stage, y = pdai_score, color = stage)) +
+  geom_boxplot(outlier.shape = NA) +
+  geom_line(aes(group = id), alpha = 0.6, color = "grey70", position = position_dodge(0.2)) + 
+  geom_point(aes(group = id), size = 2, position = position_dodge(0.2)) + 
+  facet_wrap(.~group)+
+  plot_theme + 
+  labs(y = "PDAI Score") +
+  theme(legend.position = "none") +
+  scale_y_continuous(breaks = integer_breaks())
+
+ggsave("../figures/pdai_score.png", device = "png", width = 8, height = 6)
+  
+```
+
+## correlation bewtween PDAI and ext_conc
+
+```{r}
+m_pt %>% 
+  filter(stage %in% c("inclusion", "followup_30d"),
+         project == "MP") %>% 
+  ggplot(aes(x = ext_conc, y = pdai_score, color = stage, shape = stage)) +
+  #geom_line(aes(group = id), color = "black") +
+  geom_point(size = 3) + 
+  scale_y_continuous(breaks = integer_breaks())
+```
+
+
+
+

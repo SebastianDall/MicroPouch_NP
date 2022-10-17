@@ -1,0 +1,335 @@
+---
+title: "Alpha/Beta diversity"
+author: "Sebastian Mølvang Dall"
+date: '2022-08-05'
+output: html_document
+---
+
+## libraries
+```{r}
+library(tidyverse)
+library(vegan)
+library(ggpubr)
+source(file = "functions/metadata_functions.R")
+source(file = "functions/bioinformatics.R")
+source(file = "functions/gg_functions.R")
+```
+
+## metadata + mikrobiom data
+```{r}
+metadata <- load_metadata()
+
+metaphlan <- load_metaphlan("species")
+
+project_filter = "MP"
+```
+
+
+### Isolate metadata in metaphlan table
+First step is isolation of samples in colnames(metaphlan) in metadata sheet. Thereafter, relevant columns are selected.
+
+```{r}
+metadata_in_metaphlan <- prepare_metadata(metadata) %>% 
+  filter(LibID %in% colnames(metaphlan))
+
+metadata_all <- prepare_metadata(metadata)
+```
+
+
+Next chunck checks which samples did not make it into the analysis
+```{r}
+metadata_not_in_metaphlan <- prepare_metadata(metadata) %>% 
+  filter(!LibID %in% colnames(metaphlan)) %>% 
+  filter(!is.na(id), !is.na(sample_barcode))
+```
+
+
+
+### Calculating species richness and shannon diversity
+
+Species richness is defined as species with a relative abundance >0. Alpha diversity was calculated using Shannon Index.
+
+```{r}
+# Species richness
+species_richness <- metaphlan %>% 
+  select(-NCBI_tax_id) %>% 
+  pivot_longer(-clade_name, names_to = "LibID") %>% 
+  group_by(LibID) %>% 
+  summarise(richness = sum(value > 0))
+
+#transpose for vegan  
+t_metaphlan <- metaphlan %>% 
+  select(-NCBI_tax_id) %>% 
+  pivot_longer(-clade_name, names_to = "LibID") %>% 
+  pivot_wider(names_from = clade_name, values_from = value) %>% 
+  arrange(LibID) %>% 
+  column_to_rownames(var = "LibID")
+  
+#Shannon diversity
+shannon_diversity <- tibble(LibID = rownames(t_metaphlan), shannon = diversity(as.matrix(t_metaphlan), index = "shannon" ))
+
+alpha_diversity_df <- full_join(species_richness, shannon_diversity)
+```
+
+
+
+
+#### Joining with metadata_in_metaphlan
+
+
+```{r}
+metadata_with_alpha <- metadata_in_metaphlan %>% 
+  left_join(alpha_diversity_df)
+```
+
+Adding which patients achieved remission post treatment.
+```{r}
+metadata_MP <- IsolateProjectAndDonor(metadata_all, project_filter = project_filter)
+metadata_MP_with_data <- IsolateProjectAndDonor(metadata_in_metaphlan, project_filter = project_filter)
+
+remission_relapse <- metadata_MP_with_data %>% 
+  filter(!is.na(pdai_score)) %>% 
+  group_by(id) %>% 
+  filter(n_distinct(stage) == 2) %>% 
+  select(id, stage, group, pdai_score) %>% 
+  pivot_wider(names_from = stage, values_from = pdai_score) %>% 
+  mutate(remission = if_else(inclusion - followup_30d > 2 & followup_30d <= 7, "remission", "relapse")) %>% 
+  select(id, group, remission)
+
+
+
+metadata_MP_remission <- left_join(metadata_MP_with_data, remission_relapse)
+metadata_MP_remission_alpha <- left_join(metadata_MP_remission, alpha_diversity_df)
+
+```
+
+
+## GGplot Alpha
+### FMT/PLACEBO
+
+Depending on the `project_filter` tag two different ggplots are created. The ggplot code can be found in `functions/gg_functions.R`.
+
+```{r}
+gg_alpha_rich <- gg_alpha(metadata_MP_remission_alpha, alpha_metric = "richness", project_filter = project_filter) +
+  labs(y = "Number of Species") +
+  theme(legend.position = "none")
+
+gg_alpha_shan <- gg_alpha(metadata_MP_remission_alpha, alpha_metric = "shannon", project_filter = project_filter) +
+  labs(y = "Shannon Diversity")
+
+if (project_filter == "NP") {
+  widths = c(1.6,2)
+} else{
+  widths = c(1,1)
+}
+
+ggarrange(gg_alpha_rich, gg_alpha_shan, ncol = 2, labels = c("A", "B"), widths = widths)
+#ggsave(paste0("../figures/",project_filter,"_alpha_rich_shan.png"), device = "png", width = 8)
+```
+
+### REMISSION/RELAPSE ~ FMT/PLACEBO
+
+```{r}
+metadata_MP_remission_alpha %>% 
+  filter(x_axis != "Donor", x_axis %in% c("Pre", "Post"), !is.na(remission)) %>% 
+ggplot(aes(x = fct_rev(x_axis), y = richness, color = x_axis)) + 
+  geom_boxplot(outlier.shape = NA) +    
+  geom_point(aes(group = id), position = position_dodge(0.2)) +
+      
+  geom_line(aes(group = id), alpha = 0.6, color = "grey70", position = position_dodge(0.2)) +
+      #geom_point(aes(group = id), position = position_dodge(0.2), size = 2) +
+      #stat_compare_means(label = p.label, method = test, comparisons = list(c("Pre", "Post")), paired = T, label.y = label.y, symnum.arg = p.list) +
+      #stat_compare_means(data = filter(gg_richness_data, group != "placebo"), label = p.label, method = test, comparisons = list(c("Pre", "Donor"), c("Post", "Donor")), symnum.arg = p.list) +
+      #coord_cartesian(ylim = ylim) + 
+      facet_grid(group~remission, scales = "free_x", space = "free") +
+      plot_theme
+```
+
+
+
+
+
+
+
+## Beta-Diversity
+
+
+### BRAY CURTIS
+Distance calculated as the median bray curtis distance from patient to set of donor samples received.
+
+```{r}
+source("functions/beta_diversity_function.R")
+
+```
+
+
+```{r}
+
+if (project_filter == "NP") {
+  stages = grep("Donor", stages_all, invert = T, value = T)
+} else{
+  stages = c("Pre", "Post")
+}
+
+metadata_beta_diversity_bray <- beta_diversity(metadata_MP, t_metaphlan, transform = T, stages = stages, seed = 1)
+
+```
+
+```{r}
+donor_id <- metadata_MP %>% 
+  filter(x_axis == "Donor") %>% 
+  select(LibID, id) %>% 
+  rename(donor_id = id,
+         donor_comparison = LibID)
+
+usedLabels <- stages_labels[stages_all %in% stages]
+
+metadata_beta_diversity_bray_summarised <- summariseBetaDiversityOutput(metadata_beta_diversity_bray, donor_id) %>% 
+  mutate(x_axis = factor(x_axis, levels = stages, labels = usedLabels))
+
+if (project_filter == "MP") {
+  gg_beta_comparison_FMT <- metadata_beta_diversity_bray_summarised %>% 
+    filter(group == "FMT") %>% 
+    gg_beta("bray") +
+    theme(legend.position = "none")
+  
+  gg_beta_comparison_placebo <- metadata_beta_diversity_bray_summarised %>% 
+    filter(group == "placebo") %>%
+    gg_beta("bray") +
+    theme(axis.title.y = element_blank(),
+        axis.text.y = element_blank(),
+        axis.ticks.y = element_blank())
+  
+  gg_bray <- ggarrange(gg_beta_comparison_FMT, gg_beta_comparison_placebo, ncol = 2, widths = c(2,1))
+  #ggsave(filename = "../figures/beta-diversity_hellinger_bray_coeff_placebo.png", device = "png", height = 5, width = 3.5)
+} else if (project_filter == "NP") {
+  gg_beta_comparison_NP_bray <- metadata_beta_diversity_bray_summarised %>% 
+    filter(group == "FMT") %>% 
+    gg_beta("bray", project_filter = project_filter) +
+    theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.35),
+          legend.position = "right")
+}
+
+
+```
+
+```{r}
+y.lab = "Similarity to Donors (Bray-Curtis)"
+
+metadata_beta_diversity_bray_summarised_remission <- metadata_beta_diversity_bray_summarised %>% 
+  left_join(remission_relapse)
+fmt_relapse <- metadata_beta_diversity_bray_summarised_remission %>% 
+  filter(remission == "relapse", group == "FMT", comparison == "Actual Donors")
+
+gg_beta_remission_fmt <- metadata_beta_diversity_bray_summarised_remission %>% 
+  filter(group == "FMT", comparison == "Actual Donors") %>% 
+  ggplot(aes(x = x_axis, y = 1 - beta_diversity, color = x_axis)) +
+      geom_boxplot(data = fmt_relapse, outlier.shape = NA) +
+      geom_line(aes(group = id), alpha = 0.6, color = "grey70", position = position_dodge(0.2)) + 
+      geom_point(aes(group = id), position = position_dodge(0.2), size = 2) +
+      labs(title = "FMT group", x = "", y = y.lab) +
+      ylim(c(0,0.45)) +
+      facet_grid(comparison~remission) +
+      plot_theme
+
+gg_beta_remission_placebo <- metadata_beta_diversity_bray_summarised_remission %>% 
+  filter(group == "placebo", comparison == "All Donors") %>% 
+  ggplot(aes(x = x_axis, y = 1 - beta_diversity, color = x_axis)) +
+      geom_boxplot(outlier.shape = NA) +
+      geom_line(aes(group = id), alpha = 0.6, color = "grey70", position = position_dodge(0.2)) + 
+      geom_point(aes(group = id), position = position_dodge(0.2), size = 2) +
+      labs(title = "Placebo group", x = "", y = "") +
+      ylim(c(0,0.45)) +
+      facet_grid(comparison~remission) +
+      plot_theme
+
+ggarrange(gg_beta_remission_fmt, gg_beta_remission_placebo)
+ggsave("../figures/beta-diversity_bray_coeff_remission.png", width = 8, height = 6)
+```
+
+
+
+
+### Sorensen
+
+```{r}
+metadata_beta_diversity_sorensen <- beta_diversity(metadata_MP, t_metaphlan, method = "sorensen", stages = stages, seed = 1)
+
+metadata_beta_diversity_sorensen_summarised <- summariseBetaDiversityOutput(metadata_beta_diversity_sorensen, donor_id) %>% 
+  mutate(x_axis = factor(x_axis, levels = stages, labels = usedLabels))
+
+
+if (project_filter == "MP") {
+  gg_beta_comparison_FMT <- metadata_beta_diversity_sorensen_summarised %>% 
+    filter(group == "FMT") %>% 
+    gg_beta("sorensen") +
+    theme(legend.position = "none")
+  
+  gg_beta_comparison_placebo <- metadata_beta_diversity_sorensen_summarised %>% 
+    filter(group == "placebo") %>%
+    gg_beta("sorensen") +
+    theme(axis.title.y = element_blank(),
+        axis.text.y = element_blank(),
+        axis.ticks.y = element_blank())
+  
+  gg_sor <- ggarrange(gg_beta_comparison_FMT, gg_beta_comparison_placebo, ncol = 2, widths = c(2,1))
+  #ggsave(filename = "../figures/beta-diversity_hellinger_bray_coeff_placebo.png", device = "png", height = 5, width = 3.5)
+} else if (project_filter == "NP") {
+  gg_beta_comparison_NP_sorensen <- metadata_beta_diversity_sorensen_summarised %>% 
+    filter(group == "FMT") %>% 
+    gg_beta("sorensen", project_filter = project_filter) +
+    theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.35))
+}
+
+```
+
+
+```{r}
+
+if (project_filter == "MP") {
+  ggarrange(gg_sor, gg_bray, ncol = 2, labels = c("A", "B"))
+  #ggsave(filename = paste0("../figures/beta-diversity_median_sor_bray_alldonor_",test,".png"), device = "png", width = 10, height = 5)
+
+} else if (project_filter == "NP") {
+  widths = c(1, 1.2)
+  ggarrange(gg_beta_comparison_NP_sorensen, gg_beta_comparison_NP_bray, ncol = 2, labels = c("A", "B"), widths = widths)
+  #ggsave(paste0("../figures/",project_filter,"_beta_diversity.png"), device = "png", height = 5, width = 8)
+}
+```
+
+
+
+
+
+
+
+#### BRAY without Transformation
+Produces supplementary figure in MicroPouch article. Bray Curtis similarity without Hellinger transformation.
+
+```{r}
+metadata_beta_diversity_bray_notrans <- beta_diversity(metadata_MP, t_metaphlan, method = "bray", transform = F, stages = stages, seed = 1)
+```
+
+```{r}
+metadata_beta_diversity_bray_summarised_no_trans <- summariseBetaDiversityOutput(metadata_beta_diversity_bray_notrans, donor_id) %>% 
+  mutate(x_axis = factor(x_axis, levels = stages, labels = usedLabels))
+
+
+gg_beta_comparison_FMT <- metadata_beta_diversity_bray_summarised_no_trans %>% 
+    filter(group == "FMT") %>% 
+    gg_beta("bray") +
+    theme(legend.position = "none")
+  
+gg_beta_comparison_placebo <- metadata_beta_diversity_bray_summarised_no_trans %>% 
+  filter(group == "placebo") %>%
+  gg_beta("bray") +
+  theme(axis.title.y = element_blank(),
+      axis.text.y = element_blank(),
+      axis.ticks.y = element_blank())
+
+gg_bray <- ggarrange(gg_beta_comparison_FMT, gg_beta_comparison_placebo, ncol = 2, widths = c(2,1))
+gg_bray
+
+#ggsave(filename = "../figures/beta-diversity_median_bray_coeff_transform_F_wilcox.test.png", device = "png", width = 6, height = 5)
+```
+
