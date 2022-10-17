@@ -2,6 +2,7 @@
 data/metadata/csv/*.csv
 data/metaphlan3/*
 
+tests/testthat/data/*
 
 # History files
 .Rhistory
