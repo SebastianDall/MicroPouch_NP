@@ -1,3 +1,8 @@
+# Sensitive data
+data/metadata/csv/*.csv
+data/metaphlan3/*
+
+
 # History files
 .Rhistory
 .Rapp.history
