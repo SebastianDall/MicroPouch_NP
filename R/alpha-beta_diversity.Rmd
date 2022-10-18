@@ -10,9 +10,9 @@ output: html_document
 library(tidyverse)
 library(vegan)
 library(ggpubr)
-source(file = "functions/metadata_functions.R")
-source(file = "functions/bioinformatics.R")
-source(file = "functions/gg_functions.R")
+source(file = "R/functions/metadata_functions.R")
+source(file = "R/functions/bioinformatics.R")
+source(file = "R/functions/gg_functions.R")
 ```
 
 ## metadata + mikrobiom data
@@ -21,7 +21,7 @@ metadata <- load_metadata()
 
 metaphlan <- load_metaphlan("species")
 
-project_filter = "MP"
+project_filter = "NP"
 ```
 
 
@@ -29,10 +29,10 @@ project_filter = "MP"
 First step is isolation of samples in colnames(metaphlan) in metadata sheet. Thereafter, relevant columns are selected.
 
 ```{r}
-metadata_in_metaphlan <- prepare_metadata(metadata) %>% 
+metadata_in_metaphlan <- selectMetadata(metadata) %>% 
   filter(LibID %in% colnames(metaphlan))
 
-metadata_all <- prepare_metadata(metadata)
+metadata_all <- selectMetadata(metadata)
 ```
 
 
@@ -52,18 +52,11 @@ Species richness is defined as species with a relative abundance >0. Alpha diver
 ```{r}
 # Species richness
 species_richness <- metaphlan %>% 
-  select(-NCBI_tax_id) %>% 
-  pivot_longer(-clade_name, names_to = "LibID") %>% 
-  group_by(LibID) %>% 
-  summarise(richness = sum(value > 0))
+  calculateSpeciesRichness()
 
 #transpose for vegan  
 t_metaphlan <- metaphlan %>% 
-  select(-NCBI_tax_id) %>% 
-  pivot_longer(-clade_name, names_to = "LibID") %>% 
-  pivot_wider(names_from = clade_name, values_from = value) %>% 
-  arrange(LibID) %>% 
-  column_to_rownames(var = "LibID")
+  transposeMetaphlan()
   
 #Shannon diversity
 shannon_diversity <- tibble(LibID = rownames(t_metaphlan), shannon = diversity(as.matrix(t_metaphlan), index = "shannon" ))
