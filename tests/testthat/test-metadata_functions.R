@@ -38,12 +38,24 @@ test_that("selectMetadata selects 13 columns",{
 
 
 
-test_that("test if isolateDonorBatchMetadata isolates donor metadata",{
-  donorbatches <- isolateDonorBatchMetadata(metadata)
+test_that("test if isolateDonorBatchMetadata isolates donor batches",{
+  patientMetadataWithDonorbatches <- isolateDonorBatchesUsed(metadata, project_filter = "MP")
 
-  expect_equal(all(donorbatches$project == "donor_batch"), TRUE)
+  expect_equal(all(patientMetadataWithDonorbatches$project == "MP"), TRUE)
+  expect_equal(all(str_detect(patientMetadataWithDonorbatches$donor_batch, "do\\d+")), TRUE) #donor_batch only contains do[number]
 })
 
+
+test_that("Test if isolateDonorAndPatientMetadata isolates metadata for both Patients and Donors",{
+  
+  patientMetadataWithDonorbatches <- isolateDonorBatchesUsed(metadata, project_filter = "MP")
+
+  DonorAndPatientMetadata <- isolateDonorAndPatientMetadata(metadata, metadata_with_donor_batches_used = patientMetadataWithDonorbatches, project_filter = "MP")
+  
+  expect_equivalent(unique(DonorAndPatientMetadata$project), c("donor_batch", "MP"))
+  expect_equivalent(unique(DonorAndPatientMetadata$group), c(NA, "FMT", "placebo"))
+
+})
 
 
 

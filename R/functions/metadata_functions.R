@@ -66,14 +66,31 @@ IsolateProjectAndDonor <- function(metadata, project_filter = "MP"){
 }
 
 
-isolateDonorBatchMetadata <- function(metadata){
-  donorbatch_metadata <- metadata %>% 
+isolateDonorBatchesUsed <- function(metadata, project_filter){
+  patientMetadataWithDonorbatches <- metadata %>% 
     pivot_longer(batch_1:batch_3, names_to = "batch", values_to = "batch_number") %>% 
     filter(!is.na(batch_number), project == project_filter) %>% 
     mutate(donor_batch = paste0(donor, "_", batch_number))
 
-  return(donorbatch_metadata)
+  return(patientMetadataWithDonorbatches)
 }
+
+isolateDonorAndPatientMetadata <- function(metadata, metadata_with_donor_batches_used, project_filter){
+  DonorAndPatientMetadata <- metadata %>% 
+    mutate(donor_batch = paste0(id, "_", fecal_donation_number)) %>% 
+    filter(project == project_filter | donor_batch %in% metadata_with_donor_batches_used$donor_batch) %>% 
+    mutate(group = if_else(project == "donor_batch", "FMT", group))
+
+    return(DonorAndPatientMetadata)
+}
+
+createXaxis <- function(df){
+  dfWithXaxis <- df %>%
+    mutate(x_axis = if_else(stage == "inclusion", "Pre",
+                            if_else(stage == "followup_30d", "Post", stage))) %>% 
+    mutate(x_axis = if_else(project == "donor_batch", "Donor", x_axis))
+}
+
 
 
 ### Metaphlan functions
