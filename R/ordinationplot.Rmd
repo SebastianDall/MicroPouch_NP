@@ -12,8 +12,10 @@ output: html_document
 library(tidyverse)
 library(ampvis2)
 library(RColorBrewer)
-source("functions/metadata_functions.R")
-source("functions/bioinformatics.R")
+library(mplibrary)
+source("./R/functions/metadata_functions.R")
+source("./R/functions/bioinformatics.R")
+source("./R/functions/gg_functions.R")
 ```
 
 
@@ -24,261 +26,53 @@ metadata <- load_metadata()
 
 metaphlan <- load_metaphlan("fulltax_species")
 
-project_filter = "MP"
+project_filter <- "NP"
 ```
 
 
 
-### Prepare metadata
-
-```{r}
-metadata_in_metaplan <- prepare_metadata(metadata) %>% 
-  filter(LibID %in% colnames(metaphlan))
-
-metadata_MP <- prepare_metadata(metadata) %>%
-  filter(LibID %in% colnames(metaphlan)) %>%
-  IsolateProjectAndDonor(project_filter = "MP") %>% 
-  relocate(LibID) %>% 
-  mutate(sample_group = paste0(x_axis, " ",group),
-         sample_group = if_else(str_detect(sample_group, "Donor FMT"), str_remove(sample_group, " FMT"), sample_group))
-```
-
-
-### Prepare tax data
-
-```{r}
-metaphlan_otu <- metaphlan %>%
- select(-NCBI_tax_id) %>%
- select(clade_name, metadata_MP$LibID) %>% 
- mutate(OTU = paste0("OTU",row_number())) %>% 
- relocate(OTU)
-
-
-otutable <- metaphlan_otu %>% 
-  select(-clade_name)
-
-
-taxtable <- metaphlan_otu %>% 
-  select(OTU, clade_name) %>% 
-  separate(clade_name, sep = "\\|", into = c("Kingdom", "Phylum", "Class", "Order", "Family", "Genus", "Species")) %>% 
-  relocate(OTU, .after = "Species")
-```
-
-
-## Load ampvis
-
-
-```{r}
-d <- amp_load(
-  otutable = otutable,
-  metadata = metadata_MP,
-  taxonomy = taxtable
-)
-```
-
-
-### Filter ampvis for pre post
-
-```{r}
-stages = stages_pre_post
-
-metadata_pre_post <- metadata_MP %>% 
-  filter(x_axis %in% stages, x_axis != "Donor") %>% 
-  group_by(id) %>%
-  filter(n_distinct(x_axis) == 2) %>% 
-  ungroup()
-```
-
-```{r}
-d_pre_post <- d %>% 
-  amp_subset_samples(LibID %in% metadata_pre_post$LibID)
-```
-
-#MP
-### Ordination
-
-```{r}
-pca <- d %>% 
-  amp_subset_samples(LibID %in% metadata_pre_post$LibID | x_axis == "Donor") %>% 
-  amp_ordinate(
-  type = "pca",
-  transform = "hellinger",
-  sample_color_by = "sample_group",
-  sample_shape_by = "x_axis",
-  species_plot = F,
-  species_nlabels = 5,
-  species_label_taxonomy = "Genus",
-  filter_species = 0,
-  sample_plotly = "id",
-  sample_colorframe = F
-) + 
-  geom_line(aes(group = id), color = "grey70") +
-  theme(legend.title = element_blank()) +
-  scale_color_brewer(palette = "Paired")
-
-pt014_do016 <- pca$data %>% 
-  filter(id == "pt014" & x_axis == "Post" | donor_batch == "do016_4")
-pca +
-  geom_text(data = pt014_do016, aes(x = PC1, y = PC2+0.04, label = id), color = "red", size = 3)
-
-#ggsave("../figures/amp_pca_hellinger_all.png", device = "png", width = 7, height = 5)
-```
-
-
-
-```{r}
-paired_2_5 = brewer.pal(n = 5, "Paired")[2:5]
-
-rda_ord_pt <- d_pre_post %>% 
-  #amp_filter_samples(x_axis == "Post") %>% 
-  amp_ordinate(
-  
-  type = "rda",
-  constrain = "sample_group",
-  transform = "hellinger",
-  sample_color_by = "sample_group",
-  sample_colorframe = T,
-  sample_colorframe_label = "sample_group",
-  species_plot = F,
-  envfit_show = T,
-  detailed_output = T
-)
-
-rda_ord_pt$plot +
-  labs(fill = "", color = "") +
-  scale_color_manual(values = paired_2_5) +
-  scale_fill_manual(values = paired_2_5) +
-  theme(legend.position = "none")
-
-
-#ggsave("../figures/amp_rda_hellinger_no_donor.png", device = "png")
-```
-
-
-
-
-
-```{r}
-
-metadata_all_stages <- metadata_MP %>% 
-  filter(project %in% c("MP", "donor_batch"), x_axis %in% stages_all, group != "placebo") %>% 
-  mutate(x_axis = factor(x_axis, levels = stages_all)) %>% 
-  arrange(id, fecal_donation_number)
-
-d_MP_all <- amp_load(
-  otutable = otutable,
-  metadata = metadata_all_stages,
-  taxonomy = taxtable
-)
-
-
-
-d_MP_all %>% 
-  amp_ordinate(
-  type = "pca",
-  transform = "hellinger",
-  sample_color_by = "id",
-  sample_shape_by = "project",
-  #sample_plotly = "donor_batch",
-  species_plot = F,
-  species_nlabels = 5,
-  species_label_taxonomy = "Genus",
-  filter_species = 0,
-  sample_colorframe = F
-) +
-  geom_path(aes(group = id), color = "grey70")
-
-
-
-  
-```
-
-
-
-Next chunck calculates the difference between centroids for groups in the PCA.
-`envfit()` calculates the regression of supplementary variables on the ordination axes of unconstrained ordination. Furthermore `envfit()` can test the significance of this test by permutation (that is shuffling of the supplementary variable).
-
-For factors significance of the fit is calculated by testing if the variation within centroids are significantly different from total spread of the data. That is $$r^{2} = 1 - \frac{ss_w}{ss_t} $$, where $$ss_{w}$$ and $$ss_t$$ are within-group and total sums of squares, respectively. To test if this fit is significant `envfit()` and `pairwise.factorfit()` uses permutations of the data to test if this explanation of variance is significant.
-
-*It is crucial* that test for significance using `envfit()` is done on unconstrained ordination. If the test is done on constrained data the ordination axis already contain the information of the variable and as a consequence a randomly assigned variable can be highly significant (because the axis already contain the information).
-
-
-
-```{r}
-t_metaphlan <- metaphlan %>% 
-  dplyr::select(!NCBI_tax_id) %>% 
-  pivot_longer(-clade_name, names_to = "LibID") %>% 
-  pivot_wider(names_from = clade_name, values_from = value) %>% 
-  filter(LibID %in% metadata_pre_post$LibID) %>% 
-  arrange(LibID) %>% 
-  column_to_rownames("LibID") %>% 
-  abundance_filter(abundance_threshold = 10^-34) %>% 
-  vegan::decostand("hellinger") %>% 
-  rownames_to_column("LibID")
-
-
-MetadataMetaphlan <- metadata_pre_post %>% 
-  dplyr::select(LibID) %>% 
-  ungroup() %>% 
-  left_join(t_metaphlan) %>% 
-  column_to_rownames("LibID") %>% 
-  as.data.frame()
-
-constrain <- metadata_pre_post %>%
-  arrange(LibID) %>% 
-  select(sample_group) 
-  
-
-RDA <- rda(MetadataMetaphlan ~ sample_group, data = constrain)
-envfit(RDA, env = constrain)
-
-pca <- rda(MetadataMetaphlan)
-envfit(pca ~ constrain$sample_group)
-
-pairwise.factorfit(pca, constrain$sample_group)
-
-```
-
-#NP
 ## NP and MP donor PCA
 
 ```{r}
-metadata_NP <- prepare_metadata(metadata) %>%
+metadata_NP <- metadata %>%
   filter(LibID %in% colnames(metaphlan)) %>%
-  IsolateProjectAndDonor(project_filter = "NP") %>% 
-  relocate(LibID) %>% 
-  mutate(sample_group = paste0(x_axis, " ",group),
-         sample_group = if_else(str_detect(sample_group, "Donor FMT"), str_remove(sample_group, " FMT"), sample_group),
-         project = "NP")
+  isolateProjectMetadata(project_filter = project_filter) %>%
+  relocate(LibID) %>%
+  mutate(
+    sample_group = paste0(x_axis, " ", group),
+    sample_group = if_else(str_detect(sample_group, "Donor FMT"), str_remove(sample_group, " FMT"), sample_group),
+    project = "NP"
+  )
 
-metadata_MP <- prepare_metadata(metadata) %>%
+metadata_MP <- metadata %>%
   filter(LibID %in% colnames(metaphlan)) %>%
-  IsolateProjectAndDonor(project_filter = "MP") %>% 
-  relocate(LibID) %>% 
-  mutate(sample_group = paste0(x_axis, " ",group),
-         sample_group = if_else(str_detect(sample_group, "Donor FMT"), str_remove(sample_group, " FMT"), sample_group),
-         project = "MP")
+  isolateProjectMetadata(project_filter = "MP") %>%
+  relocate(LibID) %>%
+  mutate(
+    sample_group = paste0(x_axis, " ", group),
+    sample_group = if_else(str_detect(sample_group, "Donor FMT"), str_remove(sample_group, " FMT"), sample_group),
+    project = "MP"
+  )
 
-metadata_NP_MP <- bind_rows(metadata_MP, metadata_NP) %>% 
+metadata_NP_MP <- bind_rows(metadata_MP, metadata_NP) %>%
   mutate(sample_group = paste0(sample_group, " ", project))
-
 ```
 
 ```{r}
 metaphlan_otu <- metaphlan %>%
- select(-NCBI_tax_id) %>%
- select(clade_name, metadata_NP_MP$LibID) %>% 
- mutate(OTU = paste0("OTU",row_number())) %>% 
- relocate(OTU)
+  select(-NCBI_tax_id) %>%
+  select(clade_name, metadata_NP_MP$LibID) %>%
+  mutate(OTU = paste0("OTU", row_number())) %>%
+  relocate(OTU)
 
 
-otutable <- metaphlan_otu %>% 
+otutable <- metaphlan_otu %>%
   select(-clade_name)
 
 
-taxtable <- metaphlan_otu %>% 
-  select(OTU, clade_name) %>% 
-  separate(clade_name, sep = "\\|", into = c("Kingdom", "Phylum", "Class", "Order", "Family", "Genus", "Species")) %>% 
+taxtable <- metaphlan_otu %>%
+  select(OTU, clade_name) %>%
+  separate(clade_name, sep = "\\|", into = c("Kingdom", "Phylum", "Class", "Order", "Family", "Genus", "Species")) %>%
   relocate(OTU, .after = "Species")
 
 
@@ -291,107 +85,32 @@ d <- amp_load(
 
 
 ```{r}
-stages = stages_pre_post
+stages <- stages_pre_post
 
-metadata_NP_MP_stages <- metadata_NP_MP %>% 
+metadata_NP_MP_stages <- metadata_NP_MP %>%
   filter(x_axis %in% stages)
 
-d_subset <- d %>% 
+d_subset <- d %>%
   amp_subset_samples(LibID %in% metadata_NP$LibID | x_axis == "Donor", x_axis %in% stages, id != "pt002")
 ```
 
 
 
 ```{r}
-d_subset %>% 
+d_subset %>%
   amp_ordinate(
-  type = "pca",
-  transform = "hellinger",
-  sample_color_by = "sample_group",
-  species_plot = T,
-  species_nlabels = 7,
-  species_label_taxonomy = "Genus",
-  sample_shape_by = "x_axis"
-) + 
+    type = "pca",
+    transform = "hellinger",
+    sample_color_by = "sample_group",
+    species_plot = T,
+    species_nlabels = 7,
+    species_label_taxonomy = "Genus",
+    sample_shape_by = "x_axis"
+  ) +
   geom_line(aes(group = id), color = "grey70") +
   theme(legend.title = element_blank()) +
   scale_color_brewer(palette = "Paired")
 
-ggsave("../figures/NP_PCA.png", device = "png", width = 6, height = 6)
-
-
+# ggsave("../figures/NP_PCA.png", device = "png", width = 6, height = 6)
 ```
-
-```{r}
-d_subset %>% 
-  amp_heatmap(tax_show = 35,
-              normalise = F,
-              tax_aggregate = "Genus")
-```
-
-
-## MP + Asym
-
-```{r}
-metadata <- prepare_metadata(metadata) %>%
-  filter(LibID %in% colnames(metaphlan)) %>% 
-  relocate(LibID)
-
-
-metaphlan_otu <- metaphlan %>%
- select(-NCBI_tax_id) %>%
- select(clade_name, metadata$LibID) %>% 
- mutate(OTU = paste0("OTU",row_number())) %>% 
- relocate(OTU)
-
-otutable <- metaphlan_otu %>% 
-  select(-clade_name)
-
-d <- amp_load(
-  otutable = otutable,
-  metadata = metadata,
-  taxonomy = taxtable
-)
-
-```
-
-
-```{r}
-metadata_sub <- metadata %>% 
-  filter(LibID %in% metadata_MP$LibID | id == "asym004") %>% 
-  filter( stage %in% c(NA, "inclusion", "followup_30d"), project != "donor_screening", group %in% c(NA, "FMT")) %>% 
-  group_by(id) %>% 
-  filter(n() > 1)
-```
-
-
-
-
-
-```{r}
-pca <- d %>% 
-  amp_subset_samples(LibID %in% metadata_sub$LibID) %>% 
-  amp_ordinate(
-  type = "pca",
-  transform = "hellinger",
-  sample_color_by = "project",
-  sample_shape_by = "stage",
-  species_plot = F,
-  species_nlabels = 5,
-  species_label_taxonomy = "Genus",
-  filter_species = 0,
-  sample_colorframe = F
-) + 
-  geom_line(aes(group = id), color = "grey70") +
-  theme(legend.title = element_blank()) +
-  scale_color_brewer(palette = "Paired")
-
-pt014_do016 <- pca$data %>% 
-  filter(id == "pt014" & x_axis == "Post" | donor_batch == "do016_4")
-pca +
-  geom_text(data = pt014_do016, aes(x = PC1, y = PC2+0.04, label = id), color = "red", size = 3)
-
-ggsave("../figures/amp_pca_hellinger_fmt_donor.png", device = "png", width = 7, height = 5)
-```
-
 
