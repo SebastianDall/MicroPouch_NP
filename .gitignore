@@ -1,6 +1,7 @@
 # Sensitive data
 data/metadata/csv/*.csv
 data/metaphlan3/*
+!data/.gitkeep
 
 tests/testthat/data/*
 
