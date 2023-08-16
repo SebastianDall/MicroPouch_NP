@@ -3,6 +3,8 @@ title: "Alpha/Beta diversity"
 author: "Sebastian Mølvang Dall"
 date: '2022-08-05'
 output: html_document
+editor_options: 
+  chunk_output_type: console
 ---
 
 ## libraries
@@ -12,16 +14,23 @@ library(vegan)
 library(ggpubr)
 library(mplibrary)
 
-source(file = "R/functions/metadata_functions.R")
+source(file = "functions/metadata_functions.R")
 # source(file = "R/functions/bioinformatics.R")
-source(file = "R/functions/gg_functions.R")
+source(file = "functions/gg_functions.R")
 ```
 
 ## metadata + mikrobiom data
 ```{r}
 metadata <- load_metadata()
 
-metaphlan <- load_metaphlan("species")
+metaphlan <- read_delim(
+    "../data/metaphlan/MetaPhlAn_4.0.3_Combined_NonHuman_Subsampled_2500000_profile.txt", 
+    delim = "\t", 
+    show_col_types = FALSE, 
+    skip = 1
+  ) %>% 
+    filter_taxonomy("species", keep_unclassified = FALSE) %>% 
+    remove_NonHuman_from_colnames()
 
 project_filter <- "NP"
 ```
@@ -32,16 +41,18 @@ First step is isolation of samples in colnames(metaphlan) in metadata sheet. The
 
 ```{r}
 metadata_in_metaphlan <- metadata %>%
-  filter(LibID %in% colnames(metaphlan))
+  filter(sample_barcode %in% colnames(metaphlan))
 
 t_metaphlan <- transposeMetaphlan(metaphlan)
 ```
+
+
 ```{r}
 metadata_NP <- isolateProjectMetadata(metadata, project_filter = project_filter)
 metadata_NP_with_data <- isolateProjectMetadata(metadata_in_metaphlan, project_filter = project_filter)
 
 remission_relapse <- metadata_NP_with_data %>%
-  filter(!is.na(pdai_score)) %>%
+  filter(!is.na(pdai_score), x_axis %in% c("Pre", "Post")) %>%
   group_by(id) %>%
   filter(n_distinct(stage) == 2) %>%
   select(id, stage, group, pdai_score) %>%
@@ -57,19 +68,12 @@ metadata_NP_remission <- left_join(metadata_NP_with_data, remission_relapse)
 Species richness is defined as species with a relative abundance >0. Alpha diversity was calculated using Shannon Index.
 
 ```{r}
-# Species richness
-species_richness <- metaphlan %>%
-  calculateSpeciesRichness()
-
-# Shannon diversity
-shannon_diversity <- tibble(LibID = rownames(t_metaphlan), shannon = diversity(as.matrix(t_metaphlan), index = "shannon"))
-
+species_richness <- calculateSpeciesRichness(metaphlan, filter_species = 0)
+shannon_diversity <- tibble(sample_barcode = rownames(t_metaphlan), shannon = diversity(as.matrix(t_metaphlan), index = "shannon"))
 alpha_diversity_df <- full_join(species_richness, shannon_diversity)
 
-metadata_with_alpha <- metadata_in_metaphlan %>%
+metadata_with_alpha <- metadata_NP_remission %>%
   left_join(alpha_diversity_df)
-
-metadata_NP_remission_alpha <- left_join(metadata_NP_remission, alpha_diversity_df)
 ```
 
 
@@ -79,18 +83,18 @@ metadata_NP_remission_alpha <- left_join(metadata_NP_remission, alpha_diversity_
 Depending on the `project_filter` tag two different ggplots are created. The ggplot code can be found in `functions/gg_functions.R`.
 
 ```{r}
-gg_alpha_rich <- gg_alpha(metadata_NP_remission_alpha, alpha_metric = "richness") +
+gg_alpha_rich <- gg_alpha(metadata_with_alpha, alpha_metric = "richness") +
   labs(y = "Number of Species") +
-  ylim(0, 100) +
+  ylim(0, 120) +
   theme(legend.position = "none")
 
-gg_alpha_shan <- gg_alpha(metadata_NP_remission_alpha, alpha_metric = "shannon") +
+gg_alpha_shan <- gg_alpha(metadata_with_alpha, alpha_metric = "shannon") +
   ylim(0, 4) +
   labs(y = "Shannon Diversity")
 
 ggarrange(gg_alpha_rich, gg_alpha_shan, ncol = 2, labels = c("A", "B"), common.legend = T, legend = "bottom")
 
-# ggsave(paste0("../figures/",project_filter,"_alpha_rich_shan.png"), device = "png", width = 8)
+ggsave("../figures/alpha_beta/alpha_rich_shan.png", device = "png", width = 8)
 ```
 
 ## Beta-Diversity
@@ -98,10 +102,6 @@ ggarrange(gg_alpha_rich, gg_alpha_shan, ncol = 2, labels = c("A", "B"), common.l
 
 ### BRAY CURTIS
 Distance calculated as the median bray curtis distance from patient to set of donor samples received.
-
-```{r}
-source("functions/beta_diversity_function.R")
-```
 
 
 ```{r}
@@ -117,10 +117,14 @@ metadata_beta_diversity_bray <- beta_diversity(metadata_MP, t_metaphlan, transfo
 
 ```{r}
 metadata_beta_bray <- createMetadataWBetadiversity(metadata_NP, t_metaphlan, method = "bray", transform = TRUE)
+metadata_beta_bray_summarised <- createANDcombineComparedOutputs(metadata_NP, metadata_beta_bray) %>%
+  summariseBetaDiversityOutput()
+
 
 metadata_beta_bray_compared <- compareFMT2ActualDonor(projectmetadata = metadata_NP, metadata_beta_bray)
 
-metadata_beta_bray_summarised <- summariseBetaDiversityOutput(metadata_beta_bray_compared)
+metadata_beta_bray_summarised <- summariseBetaDiversityOutput(metadata_beta_bray_compared) %>% 
+  drop_na()
 ```
 
 ```{r}
@@ -134,7 +138,8 @@ gg_beta_bray <- gg_beta(metadata_beta_bray_summarised, "bray")
 ```{r}
 metadata_beta_sor_summarised <- createMetadataWBetadiversity(metadata_NP, t_metaphlan, "sorensen", FALSE) %>%
   createANDcombineComparedOutputs(projectmetadata = metadata_NP) %>%
-  summariseBetaDiversityOutput()
+  summariseBetaDiversityOutput() %>% 
+  drop_na()
 
 gg_beta_sor <- gg_beta(metadata_beta_sor_summarised, "sorensen") +
   theme(legend.position = "right")
@@ -142,5 +147,5 @@ gg_beta_sor <- gg_beta(metadata_beta_sor_summarised, "sorensen") +
 
 ```{r}
 ggarrange(gg_beta_sor, gg_beta_bray, ncol = 2, labels = c("A", "B"), common.legend = T, legend = "bottom")
-# ggsave(paste0("../figures/",project_filter,"_beta_diversity.png"), device = "png", height = 5, width = 8)
+ggsave("../figures/alpha_beta/beta_diversity.png", device = "png", height = 5, width = 8)
 ```
