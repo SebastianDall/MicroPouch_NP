@@ -1,8 +1,8 @@
 # Sensitive data
-data/metadata/csv/*.csv
-data/metaphlan3/*
+data/
+data/
 !data/.gitkeep
-
+!figures/.gitkeep
 tests/testthat/data/*
 
 # History files
