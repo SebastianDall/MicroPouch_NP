@@ -3,6 +3,8 @@ title: "heatmap"
 author: "Sebastian Mølvang Dall"
 date: '2022-08-10'
 output: html_document
+editor_options: 
+  chunk_output_type: console
 ---
 
 ## Loading libraries
@@ -11,8 +13,8 @@ output: html_document
 library(tidyverse)
 library(ggpubr)
 library(mplibrary)
-source("./R/functions/metadata_functions.R")
-source("./R/functions/gg_functions.R")
+source("./functions/metadata_functions.R")
+source("./functions/gg_functions.R")
 ```
 
 ## Loading Data
@@ -22,20 +24,29 @@ source("./R/functions/gg_functions.R")
 ```{r}
 metadata <- load_metadata()
 
-metaphlan <- load_metaphlan(taxonomic_level = "genus")
+metaphlan <- read_delim(
+    "../data/metaphlan/MetaPhlAn_4.0.3_Combined_NonHuman_Subsampled_2500000_profile.txt", 
+    delim = "\t", 
+    show_col_types = FALSE, 
+    skip = 1
+  ) %>% 
+    filter_taxonomy("genus") %>% 
+    remove_NonHuman_from_colnames()
+
+t_metaphlan <- metaphlan %>%
+        transposeMetaphlan()
 
 project_filter <- "NP"
 ```
 
 ```{r}
 metadata_in_metaphlan <- metadata %>%
-  filter(LibID %in% colnames(metaphlan))
+  filter(sample_barcode %in% colnames(metaphlan))
 
 
 metaphlan_long <- metaphlan %>%
-  select(-NCBI_tax_id) %>%
-  pivot_longer(-clade_name, names_to = "LibID") %>%
-  arrange(LibID)
+  pivot_longer(-clade_name, names_to = "sample_barcode") %>%
+  arrange(sample_barcode)
 ```
 
 ### Filtering for relevant patients and donors
@@ -68,36 +79,65 @@ top_genera_weighted <- calculateTopGenera(metadata_tax_hellinger, n_genera = n_g
 top_genera_weighted_arranged_by_donor <- arrangeTopGeneraInDonor(metadata_tax_hellinger, top_genera_weighted)
 ```
 
+
+```{r}
+plot_heatmap <- function(input){
+  
+  return(
+    input %>% 
+    ggplot(aes(x = x_axis, y = fct_rev(clade_name), fill = hellinger, label = value)) +
+      geom_tile(color = "white") +
+      scale_fill_gradient(low = "white", high = "red") +
+      geom_text(color = "black") +
+      facet_grid(. ~ id, scales = "free_x", space = "free") +
+      labs(x = "", y = "") +
+      plot_theme +
+      theme(
+        axis.text.x = element_text(angle = 90, vjust = 0.35, hjust = 1),
+        axis.text = element_text(size = 12)
+      )
+  )
+}
+```
+
+
+
 ```{r}
 labels <- c("Pre", paste0("Day ", c(5, 10, 16, 28)), "Post", paste0("Follow-up ", c(1, 3, 6, 12), "M"), paste0("Donor_b", 1:12))
 stages_withdonorbatch <- c(grep("Donor", stages, invert = T, value = T), paste0("Donor_b", 1:12))
+labels_renamed <- c(stages_labels, paste0("Donor_b", 1:12)) 
+labels_renamed <- grep("Donor$", labels_renamed, invert = T, value = T)
 
 metadata_tax_hellinger %>%
   filter(clade_name %in% top_genera_weighted$clade_name) %>%
-  # group_by(id, x_axis, clade_name) %>%
-  # summarise(hellinger = mean(hellinger),
-  #           value = mean(value)) %>%
   mutate(
     clade_name = factor(clade_name, levels = top_genera_weighted_arranged_by_donor$clade_name),
     x_axis = if_else(x_axis == "Donor", paste0(x_axis, "_b", fecal_donation_number), x_axis),
-    x_axis = factor(x_axis, levels = stages_withdonorbatch, labels = labels),
+    x_axis = factor(x_axis, levels = stages_withdonorbatch, labels = labels_renamed),
     value = if_else(value < 10, round(value, 1), floor(value)),
     id = factor(id, levels = c("pt001", "pt002", "pt006", "asym004"))
   ) %>%
-  ggplot(aes(x = x_axis, y = fct_rev(clade_name), fill = hellinger, label = value)) +
-  geom_tile(color = "white") +
-  scale_fill_gradient(low = "white", high = "red") +
-  geom_text(color = "black") +
-  facet_grid(. ~ id, scales = "free_x", space = "free") +
-  labs(x = "", y = "") +
-  plot_theme +
-  theme(
-    axis.text.x = element_text(angle = 90, vjust = 0.35, hjust = 1),
-    axis.text = element_text(size = 12)
-  )
+  plot_heatmap()
 
-# ggsave("../figures/NP_heatmap_hellinger_alldonorbatches.png", device = "png", width = 20, height = 10)
+ggsave("../figures/heatmap/heatmap_hellinger_alldonorbatches.png", device = "png", width = 20, height = 10)
 ```
+
+
+```{r}
+metadata_tax_hellinger %>%
+  filter(clade_name %in% top_genera_weighted$clade_name) %>%
+  group_by(id, x_axis, clade_name) %>%
+  summarise(hellinger = mean(hellinger),
+            value = mean(value)) %>%
+  mutate(
+    clade_name = factor(clade_name, levels = top_genera_weighted_arranged_by_donor$clade_name),
+    x_axis = factor(x_axis, levels = stages, labels = stages_labels),
+    value = if_else(value < 10, round(value, 1), floor(value)),
+    id = factor(id, levels = c("pt001", "pt002", "pt006", "asym004"))
+  ) %>%
+  plot_heatmap()
+```
+
 
 ### Treatment schema
 
