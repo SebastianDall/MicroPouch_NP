@@ -2,7 +2,7 @@ library(ggplot2)
 
 stages_pre_post <- c("Pre", "Post", "Donor")
 stages_all <- c("Pre", "treatment_5", "treatment_10", "treatment_15", "treatment_21", "Post", "followup_1m", "followup_3m", "followup_6m", "followup_12m", "Donor")
-stages_labels <- c("Pre", paste0("Day ", c(5, 10, 16, 28)), "Post", paste0("Follow-up ", c(1, 3, 6, 12), "M"), "Donor")
+stages_labels <- c("Before", paste0("Day ", c(5, 10, 16, 28)), "After", paste0("Follow-up ", c(1, 3, 6, 12), "M"), "Donor")
 
 
 plot_theme <- theme_bw() +
