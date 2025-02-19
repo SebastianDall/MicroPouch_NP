@@ -1,0 +1,66 @@
+---
+title: "one-plot"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+
+
+```{r}
+library(tidyverse)
+library(ggplot2)
+library(ggpubr)
+```
+
+
+
+```{r}
+pl = list.files("../figures/", pattern ="*.RData", full.names = T)
+
+for (p in pl) {
+  load(p)
+}
+```
+#scale_color_manual(values=c("asym004" = "#074650", "pt001" = "#009292", "pt002" = "#FE6DB6", "pt006" = "#B5DAFE"), drop = FALSE, name = "") 
+
+```{r}
+theeme = theme(
+  axis.title = element_text(size = 10),
+  legend.text = element_text(size = 6)
+)
+
+ho <- ggarrange(
+  hm + 
+    theme(legend.key.size = unit(0.4, "cm"), legend.text = element_text(angle = 90), legend.title = element_text(size = 8)) + 
+    theeme, 
+  ord + theme(aspect.ratio=1, legend.key.size = unit(0.1, "cm")) + theeme, 
+  ncol = 2, 
+  legend = "bottom", 
+  labels = c("A", "B")
+)
+
+
+ggsave("../figures/panel1.png", plot = ho, device = "png", dpi = "retina", width = 10, height = 4, bg = "white")
+
+ab <- ggarrange(
+  gg_alpha_rich +
+    guides(shape ="none") +
+    scale_color_manual(
+      values=c("#074650", "#009292", "#FE6DB6", "#B5DAFE"),
+      name = ""
+    ) +
+    theeme, 
+  gg_beta_bray +
+    scale_color_manual(values=c("#009292","#FE6DB6", "#B5DAFE"), name = "") +
+    theeme + 
+    labs(y = "Bray-Curtis Similarity"), 
+  ncol = 2, 
+  labels = c("A","B"),
+  common.legend = T,
+  legend = "bottom"
+)
+# ggarrange(ho, ab, nrow = 2)
+ggsave("../figures/panel2.png", plot = ab, device = "png", dpi = "retina", width = 10, height = 4, bg = "white")
+```
+
