@@ -24,7 +24,7 @@ source(file = "functions/gg_functions.R")
 metadata <- load_metadata()
 
 metaphlan <- read_delim(
-    "../data/metaphlan/MetaPhlAn_4.0.3_Combined_NonHuman_Subsampled_2500000_profile.txt", 
+    "../data/metaphlan/MetaPhlAn_4.1.0_Combined_NonHuman_Subsampled_2000000_profile.txt", 
     delim = "\t", 
     show_col_types = FALSE, 
     skip = 1
@@ -73,7 +73,10 @@ shannon_diversity <- tibble(sample_barcode = rownames(t_metaphlan), shannon = di
 alpha_diversity_df <- full_join(species_richness, shannon_diversity)
 
 metadata_with_alpha <- metadata_NP_remission %>%
-  left_join(alpha_diversity_df)
+  left_join(alpha_diversity_df) %>% 
+  mutate(
+    id = factor(id, labels = c("IPAA Donor","Patient 1", "Patient 2", "Patient 3"))
+  )
 ```
 
 
@@ -92,8 +95,9 @@ gg_alpha_shan <- gg_alpha(metadata_with_alpha, alpha_metric = "shannon") +
   ylim(0, 4) +
   labs(y = "Shannon Diversity")
 
-ggarrange(gg_alpha_rich, gg_alpha_shan, ncol = 2, labels = c("A", "B"), common.legend = T, legend = "bottom")
+save(gg_alpha_rich, file = "../figures/alp.RData")
 
+ggarrange(gg_alpha_rich, gg_alpha_shan, ncol = 2, labels = c("A", "B"), common.legend = T, legend = "bottom")
 ggsave("../figures/alpha_beta/alpha_rich_shan.png", device = "png", width = 8)
 ```
 
@@ -103,17 +107,6 @@ ggsave("../figures/alpha_beta/alpha_rich_shan.png", device = "png", width = 8)
 ### BRAY CURTIS
 Distance calculated as the median bray curtis distance from patient to set of donor samples received.
 
-
-```{r}
-
-if (project_filter == "NP") {
-  stages <- grep("Donor", stages_all, invert = T, value = T)
-} else {
-  stages <- c("Pre", "Post")
-}
-
-metadata_beta_diversity_bray <- beta_diversity(metadata_MP, t_metaphlan, transform = T, stages = stages, seed = 1)
-```
 
 ```{r}
 metadata_beta_bray <- createMetadataWBetadiversity(metadata_NP, t_metaphlan, method = "bray", transform = TRUE)
@@ -127,8 +120,23 @@ metadata_beta_bray_summarised <- summariseBetaDiversityOutput(metadata_beta_bray
   drop_na()
 ```
 
+
+```{r}
+# add dummy asym for panel figure
+metadata_beta_bray_summarised <- metadata_beta_bray_summarised %>% 
+  bind_rows(
+    tibble(id = "asym004", x_axis = "Before", actual_donor = NA, group = NA, median_dissimilarity = NA)
+  ) %>% 
+  mutate(
+    id = factor(id, labels = c("IPAA Donor","Patient 1", "Patient 2", "Patient 3"), levels = c("asym004", "pt001", "pt002", "pt006"))
+  ) %>% 
+  drop_na()
+```
+
+
 ```{r}
 gg_beta_bray <- gg_beta(metadata_beta_bray_summarised, "bray")
+save(gg_beta_bray, file = "../figures/beta.RData")
 ```
 
 

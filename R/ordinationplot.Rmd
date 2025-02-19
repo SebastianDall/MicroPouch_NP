@@ -27,7 +27,7 @@ source("./functions/gg_functions.R")
 metadata <- load_metadata()
 
 metaphlan <- read_delim(
-    "../data/metaphlan/MetaPhlAn_4.0.3_Combined_NonHuman_Subsampled_2500000_profile.txt", 
+    "../data/metaphlan/MetaPhlAn_4.1.0_Combined_NonHuman_Subsampled_2000000_profile.txt", 
     delim = "\t", 
     show_col_types = FALSE, 
     skip = 1
@@ -38,33 +38,34 @@ metaphlan <- read_delim(
 project_filter <- "NP"
 ```
 
-
-
 ## NP and MP donor PCA
 
 ```{r}
 metadata_NP <- metadata %>%
   filter(sample_barcode %in% colnames(metaphlan)) %>%
   isolateProjectMetadata(project_filter = project_filter) %>%
+  mutate(x_axis = factor(x_axis, levels = stages_all, labels = stages_labels)) %>% 
   relocate(sample_barcode) %>%
   mutate(
     sample_group = paste0(x_axis, " ", group),
-    sample_group = if_else(str_detect(sample_group, "Donor FMT"), str_remove(sample_group, " FMT"), sample_group),
+    sample_group = if_else(str_detect(sample_group, "Donor FMT"), "IPAA Donor", sample_group),
     project = "NP"
   )
 
 metadata_MP <- metadata %>%
   filter(sample_barcode %in% colnames(metaphlan)) %>%
-  isolateProjectMetadata(project_filter = "MP") %>%
+  filter(project == "donor_batch", id != "asym004") %>%
+  mutate(x_axis = "Donor") %>%
+  mutate(x_axis = factor(x_axis, levels = stages_all, labels = stages_labels)) %>% 
   relocate(sample_barcode) %>%
   mutate(
     sample_group = paste0(x_axis, " ", group),
-    sample_group = if_else(str_detect(sample_group, "Donor FMT"), str_remove(sample_group, " FMT"), sample_group),
+    sample_group = if_else(str_detect(sample_group, "Donor FMT"), "Healthy Donor", sample_group),
     project = "MP"
-  )
+  ) %>% 
+  distinct(id, .keep_all = T)
 
-metadata_NP_MP <- bind_rows(metadata_MP, metadata_NP) %>%
-  mutate(sample_group = paste0(sample_group, " ", project))
+metadata_NP_MP <- bind_rows(metadata_MP, metadata_NP)
 ```
 
 ```{r}
@@ -98,45 +99,54 @@ d <- amp_load(
 
 
 ```{r}
-stages <- stages_pre_post
+stages <- c("Before", "After", "Donor")
 
 metadata_NP_MP_stages <- metadata_NP_MP %>%
   filter(x_axis %in% stages)
 
 d_subset <- d %>%
-  amp_subset_samples(sample_barcode %in% metadata_NP$sample_barcode | x_axis == "Donor", x_axis %in% stages, id != "pt002")
+  amp_subset_samples(sample_barcode %in% metadata_NP$sample_barcode | x_axis == "Donor", x_axis %in% stages)
 ```
 
 
 
 ```{r}
-
-
 d_subset$metadata <- d_subset$metadata %>% 
-  mutate(id = if_else(str_detect(id, "pt"), id, NA))
-
-
-x1 <- x %>% 
-  filter(str_detect("pt", id))
-  mutate(id = if_else(str_detect("pt", id), id, NA))
+  mutate(
+    id = if_else(str_detect(id, "pt"), id, NA),
+    id = factor(id, labels = c("Patient 1", "Patient 2", "Patient 3"), levels = c("pt001", "pt002", "pt006"))
+  )
 
 gg_pca <- d_subset %>%
+  amp_filter_taxa(tax_vector = c("p__UNCLASSIFIED"), remove = T) %>% 
   amp_ordinate(
     type = "pca",
     transform = "hellinger",
     sample_color_by = "sample_group",
     sample_point_size = 4,
     species_plot = T,
-    species_nlabels = 7,
-    species_label_taxonomy = "Genus",
-    sample_shape_by = "x_axis"
+    species_nlabels = 5,
+    species_label_taxonomy = "Genus"
   )
 
-gg_pca +
-  geom_line(data = filter(gg_pca$data, str_detect(id, "pt")), aes(group = id), color = "grey70") +
-  theme(legend.title = element_blank()) +
-  scale_color_brewer(palette = "Paired")
+lbl = gg_pca$data %>% 
+  select(id, PC1, PC2) %>% 
+  filter(!is.na(id)) %>% 
+  group_by(id) %>% 
+  summarise(
+    PC1 = mean(PC1),
+    PC2 = mean(PC2)
+  ) 
+  
+  
 
+ord <- gg_pca +
+  geom_line(data = filter(gg_pca$data, str_detect(id, "Patient")), aes(group = id), color = "grey70") +
+  theme(legend.title = element_blank()) +
+  scale_color_brewer(palette = "Paired") + 
+  geom_text(data = lbl, aes(x = PC1, y = PC2, label = id), color = "grey30", inherit.aes = F)
+ord
+save(ord, file = "../figures/ord.RData")
 ggsave("../figures/ordination/PCA.png", device = "png", width = 6, height = 6)
 ```
 

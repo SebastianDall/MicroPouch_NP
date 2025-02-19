@@ -25,7 +25,7 @@ source("./functions/gg_functions.R")
 metadata <- load_metadata()
 
 metaphlan <- read_delim(
-    "../data/metaphlan/MetaPhlAn_4.0.3_Combined_NonHuman_Subsampled_2500000_profile.txt", 
+    "../data/metaphlan/MetaPhlAn_4.1.0_Combined_NonHuman_Subsampled_2000000_profile.txt", 
     delim = "\t", 
     show_col_types = FALSE, 
     skip = 1
@@ -63,7 +63,7 @@ metadata_relevant <- isolateProjectMetadata(metadata_in_metaphlan, project_filte
   ) %>%
   filter(x_axis %in% stages)
 
-n_genera <- 35
+n_genera <- 15
 ```
 
 #### Adding taxonomy to metadata table
@@ -75,7 +75,7 @@ metadata_relevant_with_tax <- left_join(metadata_relevant, metaphlan_long)
 ## heatmap visualization 
 ```{r}
 metadata_tax_hellinger <- hellingerTransformSamples(metadata_relevant_with_tax)
-top_genera_weighted <- calculateTopGenera(metadata_tax_hellinger, n_genera = n_genera)
+top_genera_weighted <- calculateTopGenera(metadata_tax_hellinger %>% filter(clade_name != "UNCLASSIFIED"), n_genera = n_genera)
 top_genera_weighted_arranged_by_donor <- arrangeTopGeneraInDonor(metadata_tax_hellinger, top_genera_weighted)
 ```
 
@@ -88,13 +88,14 @@ plot_heatmap <- function(input){
     ggplot(aes(x = x_axis, y = fct_rev(clade_name), fill = hellinger, label = value)) +
       geom_tile(color = "white") +
       scale_fill_gradient(low = "white", high = "red") +
-      geom_text(color = "black") +
+      # geom_text(color = "black") +
       facet_grid(. ~ id, scales = "free_x", space = "free") +
       labs(x = "", y = "") +
       plot_theme +
       theme(
         axis.text.x = element_text(angle = 90, vjust = 0.35, hjust = 1),
-        axis.text = element_text(size = 12)
+        axis.text = element_text(size = 8),
+        strip.text.x = element_text(size = 10),
       )
   )
 }
@@ -124,7 +125,9 @@ ggsave("../figures/heatmap/heatmap_hellinger_alldonorbatches.png", device = "png
 
 
 ```{r}
-metadata_tax_hellinger %>%
+stages_labels[11] = "IPAA Donor"
+
+hm <- metadata_tax_hellinger %>%
   filter(clade_name %in% top_genera_weighted$clade_name) %>%
   group_by(id, x_axis, clade_name) %>%
   summarise(hellinger = mean(hellinger),
@@ -133,9 +136,15 @@ metadata_tax_hellinger %>%
     clade_name = factor(clade_name, levels = top_genera_weighted_arranged_by_donor$clade_name),
     x_axis = factor(x_axis, levels = stages, labels = stages_labels),
     value = if_else(value < 10, round(value, 1), floor(value)),
-    id = factor(id, levels = c("pt001", "pt002", "pt006", "asym004"))
+    id = factor(id, c("Patient 1", "Patient 2", "Patient 3",""), levels = c("pt001", "pt002", "pt006", "asym004"))
   ) %>%
-  plot_heatmap()
+  plot_heatmap() +
+  theme(
+    legend.position = "right"
+  )
+hm
+save(hm, file = "../figures/hm.RData")
+ggsave("../figures/heatmap/heatmap_hellinger.png", device = "png", width = 15, height = 10)
 ```
 
 

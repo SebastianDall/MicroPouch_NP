@@ -28,7 +28,7 @@ gg_alpha <- function(df, x = stages_all, alpha_metric = "richness") {
   gg_alpha_rich <- gg_richness_data %>%
     ggplot(aes(x = x_axis, y = alpha_metric, color = id)) +
     geom_line(aes(group = id, linetype = lty), alpha = 0.6, color = "grey70", show.legend = F) +
-    geom_point(aes(group = id, shape = shape), size = 2, show.legend = F) +
+    geom_point(aes(group = id, shape = shape), size = 2) +
     geom_point(data = filter(gg_richness_data, x_axis == "Donor"), aes(group = id), size = 2, alpha = 0.6, position = position_jitter()) +
     plot_theme +
     theme(
