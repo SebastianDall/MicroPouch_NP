@@ -1,10 +1,9 @@
 # Sensitive data
 data/
-data/
 !data/.gitkeep
+!data/metaphlan/MetaPhlAn_4.1.0_Combined_NonHuman_Subsampled_2000000_profile.txt
+!data/metadata/metadata.csv
 
-figures/
-!figures/.gitkeep
 tests/testthat/data/*
 
 # History files
